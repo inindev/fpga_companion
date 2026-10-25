@@ -377,7 +377,7 @@ static int fs_init() {
   // switch rgb led to green
   if(!timeout) {
     sdc_debugf("SD not ready, status = %d", status);
-    sys_set_rgb(0x400000);  // red, failed
+    sys_set_rgb(0x040000);  // red, failed (dimmed to 1/16)
     return -1;
   }
   
@@ -389,11 +389,11 @@ static int fs_init() {
   res_msc = f_mount(&fs, CARD_MOUNTPOINT, 1);
   if (res_msc != FR_OK) {
     sdc_debugf("mount fail,res:%d", res_msc);
-    sys_set_rgb(0x400000);  // red, failed
+    sys_set_rgb(0x040000);  // red, failed (dimmed to 1/16)
     return -1;
   }
   
-  sys_set_rgb(0x004000);  // green, ok
+  sys_set_rgb(0x000400);  // green, ok (dimmed to 1/16)
   return 0;
 }
 

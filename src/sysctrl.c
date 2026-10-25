@@ -366,7 +366,7 @@ bool sys_wait4fpga(void) {
   if(timeout) {
     sys_debugf("FPGA ready after %dms!", FPGA_BOOT_TIMEOUT-10*timeout);
 
-    sys_set_rgb(0x000040);  // blue
+    sys_set_rgb(0x000004);  // blue (dimmed to 1/16)
     return true;
   }
   
@@ -374,7 +374,7 @@ bool sys_wait4fpga(void) {
 
   // Set LED to red. This is basically useless and will only work if the
   // FPGA receives requests but cannot answer them
-  sys_set_rgb(0x400000);  // red
+  sys_set_rgb(0x040000);  // red (dimmed to 1/16)
   return false;
 }
 

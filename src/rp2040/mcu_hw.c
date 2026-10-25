@@ -1743,16 +1743,39 @@ bool mcu_hw_tcp_data(unsigned char byte) {
 #define PICO_DEFAULT_LED_PIN 25
 #endif
 
+// The on-board LED of a regular (non-W) Pico is driven by PWM, so "on" is
+// dimmed to 1/16 instead of full brightness.
+#include "hardware/pwm.h"
+#define LED_PWM_WRAP  0xffff
+#define LED_PWM_DIM   (LED_PWM_WRAP / 16)
+
+static void led_set_level(uint16_t level) {
+#if PICO_DEFAULT_LED_PIN_INVERTED
+  level = LED_PWM_WRAP - level;
+#endif
+  pwm_set_gpio_level(PICO_DEFAULT_LED_PIN, level);
+}
+
+static void led_pwm_init(void) {
+  gpio_set_function(PICO_DEFAULT_LED_PIN, GPIO_FUNC_PWM);
+  pwm_config cfg = pwm_get_default_config();   // wrap 0xffff, a few kHz: no flicker
+  pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
+  pwm_init(pwm_gpio_to_slice_num(PICO_DEFAULT_LED_PIN), &cfg, true);
+  led_set_level(LED_PWM_DIM);
+}
+
 static void led_timer(__attribute__((unused)) TimerHandle_t pxTimer) {
+  static bool blink_on = true;
   switch(inifile_option_get(INIFILE_OPTION_LED)) {
-  case 0:    
-    gpio_xor_mask( 1u << PICO_DEFAULT_LED_PIN );
+  case 0:
+    blink_on = !blink_on;
+    led_set_level(blink_on ? LED_PWM_DIM : 0);
     break;
-  case 1:    
-    gpio_set_mask( 1u << PICO_DEFAULT_LED_PIN );
+  case 1:
+    led_set_level(LED_PWM_DIM);
     break;
-  case 2:    
-    gpio_clr_mask( 1u << PICO_DEFAULT_LED_PIN );
+  case 2:
+    led_set_level(0);
     break;
   }
 }
@@ -2474,9 +2497,10 @@ void mcu_hw_init(void) {
 #endif
     {
 #ifndef WS2812_PIN
-      // the LED pin has already been setup to detect a PICO-W
-      gpio_put(PICO_DEFAULT_LED_PIN, !PICO_DEFAULT_LED_PIN_INVERTED);
-      
+      // the LED pin has already been setup to detect a PICO-W,
+      // now hand it to PWM so it can be dimmed
+      led_pwm_init();
+
       TimerHandle_t led_timer_handle =
 	xTimerCreate("LED timer", pdMS_TO_TICKS(200), pdTRUE, NULL, led_timer);
       xTimerStart(led_timer_handle, 0);

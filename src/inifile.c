@@ -30,7 +30,7 @@ static const struct option_S { char *name; char *info; int index; } option_ids[]
   {NULL,     NULL,                                   -1 }
 };
 
-static int options[2] = { 0x45, 0 };  // default options: hotkey=F12, led=blink
+static int options[2] = { 0x45, 1 };  // default options: hotkey=F12, led=on (steady)
 static void inifile_parse_option(char *id, char *value) {
   for(const struct option_S *oid = option_ids;oid->name;oid++) {
     if(!strcasecmp(oid->name, id)) {
