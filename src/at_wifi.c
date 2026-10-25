@@ -73,13 +73,16 @@ static void port_putc(unsigned char byte) {
 void at_wifi_puts(char *str)
 {
   const unsigned char *out = (const unsigned char *)str;
-  int len = strlen(str);
+  unsigned char temp[256];
 
-  if ((str == NULL) || (len <= 0))
+  if (str == NULL)
+      return;
+
+  int len = strlen(str);
+  if (len <= 0)
       return;
 
   if (petsc2) {
-      unsigned char temp[256];
       if (len > 255) len = 255;
       for (int i = 0; i < len; i++)
           temp[i] = asc2pet(str[i]);
