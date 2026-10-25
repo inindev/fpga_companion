@@ -34,7 +34,7 @@
 // Board Specific Configuration
 //--------------------------------------------------------------------+
 
-#if MISTLE_BOARD == 2
+#if MISTLE_BOARD == 2 || MISTLE_BOARD == 1   // RP2040-Zero, Pico2: native USB host
 // the waveshare rp2040 zero comes with a convenient USB-C connector
 // and PIO USB would collide with PIO-WS2812, so this never uses PIO USB
 #define CFG_TUH_RPI_PIO_USB   0
