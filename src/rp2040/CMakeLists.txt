@@ -4,6 +4,8 @@
 #
 # to build for waveshare rp2040-zero do
 #  cmake -DBOARD=WS2040ZERO ..
+# to build for waveshare rp2350-zero do
+#  cmake -DBOARD=WS2350ZERO ..
 # to build for Pico2 or Pico2-W do
 #  cmake -DBOARD=PICO2 ..
 #
@@ -28,16 +30,16 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 
 # The BOARD option selects which board to build for
 # Regular Pico (W) by default
-set(BOARD PICO CACHE STRING "Board type. Can be PICO, PICO2, WS2040ZERO, SH20KLITE, DEV20K, MSP20K, MSP2_20K, DEV25K")
+set(BOARD PICO CACHE STRING "Board type. Can be PICO, PICO2, WS2040ZERO, WS2350ZERO, SH20KLITE, DEV20K, MSP20K, MSP2_20K, DEV25K")
 
-set(BOARDS PICO PICO2 WS2040ZERO SH20KLITE DEV20K MSP20K MSP2_20K DEV25K)
+set(BOARDS PICO PICO2 WS2040ZERO WS2350ZERO SH20KLITE DEV20K MSP20K MSP2_20K DEV25K)
 if( NOT BOARD IN_LIST BOARDS)
     message(FATAL_ERROR "BOARD must be one of ${BOARDS}")
 endif()
 
 # This will also work for the the Pico-W and the regular Pico. The
 # firmware detects it and acts accordingly
-set(PICO2BOARDS PICO2 DEV25K MSP2_20K)
+set(PICO2BOARDS PICO2 WS2350ZERO DEV25K MSP2_20K)
 if( BOARD IN_LIST PICO2BOARDS)
    message("Building for RP2350")
    set(PICO_BOARD pico2_w)
@@ -87,7 +89,7 @@ add_executable(${PROJECT}
 	../tusb_xinput/xinput_host.c
 	../tusb_asix/asix_host.c
 	../config.c
-	../freertos_callbacks.c
+	freertos_callbacks.c
 	../xml.c
 	../ps2helper.c
 	../ftpd.c
@@ -115,6 +117,15 @@ elseif(${BOARD} STREQUAL WS2040ZERO)
    target_sources(${PROJECT} PRIVATE usb_descriptors.c)
    target_link_libraries(${PROJECT} PRIVATE tinyusb_device)
    add_custom_command(TARGET ${PROJECT} POST_BUILD COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --cyan "Firmware has been built for Waveshare RP2040-Zero.")
+elseif(${BOARD} STREQUAL WS2350ZERO)
+   # same pins and features as the RP2040-Zero; JTAG uses PIO on the RP2350
+   target_compile_definitions(${PROJECT} PRIVATE MISTLE_BOARD=2)
+   target_sources(${PROJECT} PRIVATE ../jtag.c ../gowin.c usb_jtag.c)
+   target_sources(${PROJECT} PRIVATE usb_descriptors.c)
+   target_sources(${PROJECT} PRIVATE pio_jtag.c)
+   target_link_libraries(${PROJECT} PRIVATE tinyusb_device)
+   pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/jtag.pio)
+   add_custom_command(TARGET ${PROJECT} POST_BUILD COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --cyan "Firmware has been built for Waveshare RP2350-Zero.")
 elseif(${BOARD} STREQUAL SH20KLITE)
    target_compile_definitions(${PROJECT} PRIVATE MISTLE_BOARD=3)
    target_compile_definitions(${PROJECT} PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
@@ -137,7 +148,7 @@ elseif(${BOARD} STREQUAL DEV25K)
    add_custom_command(TARGET ${PROJECT} POST_BUILD COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --cyan "Firmware has been built for GW3A/GW5A Dev25k.")
    target_sources(${PROJECT} PRIVATE sdio.c ../jtag.c ../gowin.c usb_jtag.c)
    target_sources(${PROJECT} PRIVATE usb_descriptors.c)
-   target_sources(${PROJECT} PRIVATE ../pio_jtag.c)
+   target_sources(${PROJECT} PRIVATE pio_jtag.c)
    target_link_libraries(${PROJECT} PRIVATE tinyusb_device)
    pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/jtag.pio)
 elseif(${BOARD} STREQUAL MSP2_20K)
@@ -145,11 +156,11 @@ elseif(${BOARD} STREQUAL MSP2_20K)
    add_custom_command(TARGET ${PROJECT} POST_BUILD COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --cyan "Firmware has been built for MiSTeryShieldPico2_TN20k.")
    target_sources(${PROJECT} PRIVATE ../jtag.c ../gowin.c usb_jtag.c)
    target_sources(${PROJECT} PRIVATE usb_descriptors.c)
-   target_sources(${PROJECT} PRIVATE ../pio_jtag.c)
+   target_sources(${PROJECT} PRIVATE pio_jtag.c)
    target_link_libraries(${PROJECT} PRIVATE tinyusb_device)
    pico_generate_pio_header(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/jtag.pio)
 else()
-   message(FATAL_ERROR "BOARD must be PICO, PICO2, WS2040ZERO, SH20KLITE, DEV20K, MSP20K, MSP2_20K or DEV25K")
+   message(FATAL_ERROR "BOARD must be one of ${BOARDS}")
 endif()
 
 target_include_directories(${PROJECT} PRIVATE
@@ -182,7 +193,11 @@ add_custom_target(flash
 )
 
 target_link_options(${PROJECT} PRIVATE -Xlinker --print-memory-usage)
-target_compile_options(${PROJECT} PRIVATE -Wall -Wextra)
+# Extra warnings for our own sources only. The SDK, FreeRTOS, TinyUSB, FatFs and
+# xinput sources are also compiled into this target, but their warnings aren't ours.
+get_target_property(OWN_SOURCES ${PROJECT} SOURCES)
+list(FILTER OWN_SOURCES EXCLUDE REGEX "/(fatfs|tusb_xinput|u8g2)/")
+set_source_files_properties(${OWN_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
 	
 add_custom_target(reset
     COMMAND echo "Reseting ${PROJECT} for ${TARGET} ..."
@@ -190,7 +205,7 @@ add_custom_target(reset
     COMMENT "Reset target using openocd"
 )
 
-if(${BOARD} STREQUAL WS2040ZERO)
+if(${BOARD} STREQUAL WS2040ZERO OR ${BOARD} STREQUAL WS2350ZERO)
   add_custom_target(term COMMAND term.sh /dev/ttyACM0 460800)
 else()
   add_custom_target(term COMMAND term.sh /dev/ttyACM0 921600)

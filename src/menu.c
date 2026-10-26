@@ -744,7 +744,7 @@ static void menu_fsel_draw(const char *label, sdc_dir_entry_t *dir, int selected
   u8g2_SendBuffer(&u8g2);
 }
 
-static void menu_custom_draw(config_custom_t *custom, int selected, int scroll) {
+static void menu_custom_draw(const config_custom_t *custom, int selected, __attribute__((unused)) int scroll) {
   u8g2_ClearBuffer(&u8g2);
 
   // =============== draw a custom dialog =================    
@@ -1458,7 +1458,7 @@ static void about_draw(void) {
   u8g2_DrawStr(&u8g2, 0, MENU_LINE_Y + 3*MENU_ENTRY_H, "http://github.com/mistle-dev");
 }
 
-const static config_custom_t about = {
+static const config_custom_t about = {
   .label = "About",
   .length = about_length,
   .draw = about_draw

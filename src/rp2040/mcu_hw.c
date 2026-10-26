@@ -38,28 +38,24 @@
 #error "No MiSTle board type specified!"
 #endif
 
-#if MISTLE_BOARD == 0
-#warning "Building for Raspberry Pi Pico or Pico-W"
-#elif MISTLE_BOARD == 1
-#warning "Building for Raspberry Pi Pico2 or Pico2-W"
-#elif MISTLE_BOARD == 2
-#warning "Building for Waveshare RP2040-Zero"
+// the board name is printed by cmake
+#if MISTLE_BOARD == 0      // Pico or Pico-W
+#elif MISTLE_BOARD == 1    // Pico2 or Pico2-W
+#elif MISTLE_BOARD == 2    // Waveshare RP2040-Zero or RP2350-Zero
+#ifdef PICO_RP2350
+#include "pio_jtag.h"
+#endif
 #include "../jtag.h"
-#elif MISTLE_BOARD == 3
-#warning "Building for MiSTeryShield20k-Lite"
-#elif MISTLE_BOARD == 4
-#warning "Building for MiSTeryDev20k"
+#elif MISTLE_BOARD == 3    // MiSTeryShield20k-Lite
+#elif MISTLE_BOARD == 4    // MiSTeryDev20k
 #include "../jtag.h"
 #include "./sdio.h"
-#elif MISTLE_BOARD == 5
-#warning "Building for MiSTeryShieldPicoTN20k"
+#elif MISTLE_BOARD == 5    // MiSTeryShieldPicoTN20k
 #include "../jtag.h"
-#elif MISTLE_BOARD == 6
-#warning "Building for GW3A/GW5A DEV 25K"
+#elif MISTLE_BOARD == 6    // GW3A/GW5A Dev25k
 #include "../jtag.h"
 #include "pio_jtag.h"
-#elif MISTLE_BOARD == 7
-#warning "Building for MiSTeryShieldPico2_TN20k"
+#elif MISTLE_BOARD == 7    // MiSTeryShieldPico2_TN20k
 #include "../jtag.h"
 #include "pio_jtag.h"
 #else
@@ -117,19 +113,8 @@
 #define LED_JOYSTICK_PIN 6
 #endif
 
-#ifdef ENABLE_WIFI
-#warning "WiFi support enabled"
-#else
-#warning "WiFi support disabled"
-#endif
-
-#ifdef ENABLE_BLUETOOTH
-#ifndef ENABLE_WIFI
+#if defined(ENABLE_BLUETOOTH) && !defined(ENABLE_WIFI)
 #error "Bluetooth needs WiFi to be enabled!"
-#endif
-#warning "Bluetooth support enabled"
-#else
-#warning "Bluetooth support disabled"
 #endif
 
 #ifdef WS2812_PIN
@@ -174,7 +159,7 @@ static struct {
   uint8_t state_y;
   uint8_t state_btn_extra;
 
-  UsbGamepadMap *map;
+  const UsbGamepadMap *map;
   bool map_found;
   bool map_checked;
 } xbox_state[MAX_XBOX_DEVICES];
@@ -483,7 +468,8 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 
     // Some device return broken hid descriptor reports. Just like the Linux
     // kernel we replace these.
-    fix_report_descriptor(desc.device.idVendor, desc.device.idProduct, desc.device.bcdDevice, desc_report, desc_len);
+    // patched in place: TinyUSB hands it over as const, but it is in RAM
+    fix_report_descriptor(desc.device.idVendor, desc.device.idProduct, desc.device.bcdDevice, (uint8_t *)desc_report, desc_len);
     
     if(parse_report_descriptor(desc_report, desc_len, &hid_device[idx].rep, NULL)) {
       hid_device[idx].dev_addr = dev_addr;
@@ -944,7 +930,7 @@ void tuh_asix_umount_cb(asixh_interface_t *itf) {
 static ppp_pcb *ppp;
 static struct netif ppp_netif;
 
-static void ppp_status_cb(ppp_pcb *pcb, int err_code, void *ctx) {
+static void ppp_status_cb(__attribute__((unused)) ppp_pcb *pcb, int err_code, __attribute__((unused)) void *ctx) {
   switch (err_code) {
   case PPPERR_NONE:
     usb_debugf("PPP Connected");
@@ -958,7 +944,7 @@ static void ppp_status_cb(ppp_pcb *pcb, int err_code, void *ctx) {
 }
 
 static int8_t cdc_idx = -1;
-u32_t ppp_output_cb(ppp_pcb *pcb, const void *data, u32_t len, void *ctx) {
+u32_t ppp_output_cb(__attribute__((unused)) ppp_pcb *pcb, const void *data, u32_t len, __attribute__((unused)) void *ctx) {
   // forward data to serial port
   if(cdc_idx < 0) {
     usb_debugf("CDC not available");
@@ -966,7 +952,7 @@ u32_t ppp_output_cb(ppp_pcb *pcb, const void *data, u32_t len, void *ctx) {
   }
 
   u32_t res = tuh_cdc_write(cdc_idx, data, len);
-  if(res != len) usb_debugf("tuh_cdc_write(): unexpected result %d != %d", res, len);
+  if(res != len) usb_debugf("tuh_cdc_write(): unexpected result %lu != %lu", res, len);
   
   return res;
 }
@@ -2315,7 +2301,7 @@ void mcu_hw_jtag_toggleClk(uint32_t clk_len) {
 #endif
 }
 
-void mcu_hw_jtag_set_clock(uint32_t clk) {
+void mcu_hw_jtag_set_clock(__attribute__((unused)) uint32_t clk) {
   // Only PIO mode actually allows to adjust the clock. GPIO mode
   // will always run at ~6MHz
 #ifdef USE_PIO_JTAG
@@ -2348,7 +2334,7 @@ static void mcu_hw_jtag_init(void) {
   mcu_hw_jtag_set_pins(0x00, 0x00);
 }
 
-void mcu_hw_fpga_reconfig(bool run) {
+void mcu_hw_fpga_reconfig(__attribute__((unused)) bool run) {
   // alternally the FPGA may be put into a mode != 00 to
   // suppress MSPI loading
 #if MISTLE_BOARD == 4 || MISTLE_BOARD == 6

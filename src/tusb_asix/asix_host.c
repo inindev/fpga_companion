@@ -186,21 +186,21 @@ static uint16_t preproc_swreset(asixh_interface_t *itf) {
   return itf->embd_phy?AX_SWRESET_IPRL:AX_SWRESET_PRTE;
 }
 
-static void postproc_rx_ctl(asixh_interface_t *itf) {
+static void postproc_rx_ctl(__attribute__((unused)) asixh_interface_t *itf) {
   TU_LOG2("ASIX: rx ctl is 0x%04x\r\n", tu_htole16(itf->rx_ctl));
 }
 
-static void postproc_medium_status(asixh_interface_t *itf) {
+static void postproc_medium_status(__attribute__((unused)) asixh_interface_t *itf) {
   TU_LOG2("ASIX: medium status is 0x%04x\r\n", tu_htole16(itf->medium_status));
 }
 
-static void postproc_read_mac(asixh_interface_t *itf) {
+static void postproc_read_mac(__attribute__((unused)) asixh_interface_t *itf) {
   TU_LOG2("ASIX: MAC is %02x:%02x:%02x:%02x:%02x:%02x\r\n",
 	 itf->mac[0],itf->mac[1],itf->mac[2],itf->mac[3],itf->mac[4],itf->mac[5]);
 }
 
 static void postproc_phy_id32(asixh_interface_t *itf) {
-  uint32_t oui = (itf->mii_phy_id[0] << 6) + (itf->mii_phy_id[1] >> 10);
+  __attribute__((unused)) uint32_t oui = (itf->mii_phy_id[0] << 6) + (itf->mii_phy_id[1] >> 10);
   
   TU_LOG2("ASIX: PHY ID is 0x%04x%04x\r\n", itf->mii_phy_id[1], itf->mii_phy_id[0] );
   TU_LOG2("      OUI %02lx:%02lx:%02lx\r\n", (oui>>16)&0xff,(oui>>8)&0xff,oui&0xff);
@@ -242,7 +242,7 @@ static uint16_t preproc_advertise(asixh_interface_t *itf) {
   return preproc_phy_id(itf);
 }
 
-static void postproc_advertise(asixh_interface_t *itf) {
+static void postproc_advertise(__attribute__((unused)) asixh_interface_t *itf) {
   TU_LOG2("ASIX: Advertise register is 0x%04x\r\n", itf->advertise);
 }
 

@@ -12,12 +12,6 @@
 
 #if MISTLE_BOARD != 2 && MISTLE_BOARD != 4 && MISTLE_BOARD != 5 && MISTLE_BOARD != 6 && MISTLE_BOARD != 7
 #error "USB JTAG is only available for the PiZero, Dev20k, MSP20k, MSP2_20k, Dev25k"
-#else
-#warning "Enabling USB JTAG bridge"
-#endif
-
-#ifdef PICO_RP2350
-#warning "Enabling PIO for JTAG on RP2350"
 #endif
 
 #include "pio_jtag.h"
@@ -514,7 +508,7 @@ static uint16_t cmd_shift_parse(struct jtag *jtag, uint8_t *buf, uint16_t len) {
 }
 
 // https://github.com/MiSTle-Dev/PICO-MPSSE/blob/main/pico_mpsse/pico_mpsse.c
-void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint32_t bufsize) {
+void tud_vendor_rx_cb(uint8_t itf, __attribute__((unused)) uint8_t const* buffer, uint32_t bufsize) {
 #if 0  
   uint8_t lbuf[bufsize]; // use a local buffer as jtag_send may want to reverse the byte order
   uint8_t *lbuffer = lbuf;

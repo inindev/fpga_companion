@@ -16,9 +16,9 @@
 #include <string.h>
 
 // If we are in a mistle firmware build environment (MISTLE_BOARD is set), then
-// the board needs to be 6 or 7 (the dev25k board using a rp2350)
+// the board needs to be an rp2350 board with JTAG: 2 (RP2350-Zero), 6 (Dev25k) or 7 (MSP2_20k)
 #ifdef MISTLE_BOARD
-#if MISTLE_BOARD != 6 && MISTLE_BOARD != 7
+#if MISTLE_BOARD != 2 && MISTLE_BOARD != 6 && MISTLE_BOARD != 7
 #error "PIO JTAG: Unsupported MiSTle board"
 #endif
 #endif
@@ -95,7 +95,6 @@ static void __time_critical_func(pio_jtag_blocking)(pio_jtag_inst_t *jtag, const
   size_t byte_length = (len+7)/8;  // bytes needed for len bits
   size_t last_shift = ((byte_length << 3) - len);
   size_t tx_remain = (len+3)/4, rx_remain = last_shift ? byte_length : byte_length+1;
-  io_rw_8 *txfifo = (io_rw_8 *) &jtag->pio->txf[jtag->sm];
   static uint8_t x; // scratch local to receive data if no receive buffer is provided
 
   /* don't do anything if pio is not enabled at all */
@@ -218,7 +217,11 @@ void pio_jtag_write_tms(pio_jtag_inst_t* jtag, bool lsb, uint tdi, const uint8_t
   for(int i=0;i<wlen;i++)
     tx_buffer[i] = (interleave_table[lsb?reverse_table[src[i]]:src[i]]<<1) | tdi_mask;
 
-  pio_jtag_blocking(jtag, (const uint8_t *)tx_buffer, dst, len);  
+  // the loop above fills all of tx_buffer, but GCC can't tell for a variable-length array
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+  pio_jtag_blocking(jtag, (const uint8_t *)tx_buffer, dst, len);
+#pragma GCC diagnostic pop
 
   // bit reverse result
   if(dst && lsb)
