@@ -13,6 +13,17 @@
 #define REPORT_TYPE_CONSUMER 4
 
 #define MAX_AXES 8
+#define MAX_KBD_FIELDS 8
+
+// a keyboard input field (usage page 7) from the report descriptor
+typedef struct {
+  uint16_t offset;      // bit offset inside report (without report id)
+  uint16_t usage_min;   // usage of the first element (variable fields)
+  uint16_t usage_max;
+  uint8_t size;         // size of one element in bits
+  uint8_t count;        // number of elements
+  uint8_t variable: 1;  // 1: one bit per usage, 0: array of usage codes
+} hid_kbd_field_t;
 
 // currently only joysticks and mice are supported
 typedef struct {
@@ -52,6 +63,12 @@ typedef struct {
       } hat;                   // 1 hat (joystick only)
     } joystick_mouse;
   };
+
+  // keyboard layout, so boot style and one-bit-per-key reports both decode
+  struct {
+    uint8_t num_fields;
+    hid_kbd_field_t field[MAX_KBD_FIELDS];
+  } keyboard;
 
 	/* --- SDL map base --- */
 	const UsbGamepadMap *map; // NULL if no match; points to .rodata (flash)

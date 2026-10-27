@@ -98,13 +98,70 @@ void kbd_parse_usage_state(struct hid_kbd_state_S *state, uint8_t modifiers,
   }
 }
 
-void kbd_parse(__attribute__((unused)) const hid_report_t *report,
+static void kbd_set_usage(uint8_t *modifiers, uint8_t keys[32], uint32_t usage)
+{
+  if (usage >= 0xe0 && usage <= 0xe7)
+    *modifiers |= (uint8_t)(1U << (usage - 0xe0));
+  else if (usage > 3 && usage <= UINT8_MAX)
+    keys[usage / 8] |= (uint8_t)(1U << (usage % 8));
+}
+
+// Decode a keyboard report using the fields found in the report descriptor.
+// Same logic as usbh_hid_keyboard_report_parse() in bl616/mcu_hw.c, which
+// gets the fields from CherryUSB's descriptor parser instead.
+static void kbd_parse_fields(const hid_report_t *report,
+                             struct hid_kbd_state_S *state,
+                             const unsigned char *buffer, int nbytes)
+{
+  uint8_t keys[32] = { 0 };
+  uint8_t modifiers = 0;
+
+  for (int i = 0; i < report->keyboard.num_fields; i++) {
+    const hid_kbd_field_t *f = &report->keyboard.field[i];
+
+    if (f->size == 0 || f->size > 32 ||
+        f->offset + (uint32_t)f->size * f->count > (uint32_t)nbytes * 8)
+      return;
+
+    for (uint32_t element = 0; element < f->count; element++) {
+      uint32_t first = f->offset + element * f->size;
+      uint32_t value = 0;
+      for (uint32_t bit = 0; bit < f->size; bit++)
+        value |= (uint32_t)((buffer[(first + bit) / 8] >> ((first + bit) % 8)) & 1) << bit;
+      if (value == 0)
+        continue;
+
+      if (f->variable) {
+        if (f->usage_min > f->usage_max)
+          continue;
+        uint32_t usage_count = (uint32_t)f->usage_max - f->usage_min + 1;
+        kbd_set_usage(&modifiers, keys,
+                      f->usage_min + (element < usage_count ? element : usage_count - 1));
+      } else {
+        // 1..3 are rollover/error codes: ignore the whole report
+        if (value <= 3)
+          return;
+        kbd_set_usage(&modifiers, keys, value);
+      }
+    }
+  }
+
+  kbd_parse_usage_state(state, modifiers, keys);
+}
+
+void kbd_parse(const hid_report_t *report,
                struct hid_kbd_state_S *state,
                const unsigned char *buffer, int nbytes)
 {
   uint8_t keys[32] = { 0 };
   uint8_t modifiers;
 
+  if (report->keyboard.num_fields) {
+    kbd_parse_fields(report, state, buffer, nbytes);
+    return;
+  }
+
+  // no keyboard fields in the descriptor: assume boot report layout
   if (nbytes != 8)
     return;
 

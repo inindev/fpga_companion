@@ -423,6 +423,26 @@ bool parse_report_descriptor(const uint8_t *rep, uint16_t rep_size, hid_report_t
                     break;
                 }
 
+                // keyboard: remember where the key data sits in the report
+                if (conf->type == REPORT_TYPE_KEYBOARD && g.usage_page == USAGE_PAGE_KEYBOARD)
+                {
+                    if (conf->keyboard.num_fields < MAX_KBD_FIELDS)
+                    {
+                        hid_kbd_field_t *f = &conf->keyboard.field[conf->keyboard.num_fields++];
+                        f->offset = bit_count;
+                        f->size = report_size;
+                        f->count = report_count;
+                        f->variable = (value & 0x02) != 0;
+                        f->usage_min = usage_range_set ? usage_min : (usage_list_len ? usage_list[0] : 0);
+                        f->usage_max = usage_range_set ? usage_max : (usage_list_len ? usage_list[usage_list_len - 1] : 0);
+                        hidp_debugf("KEYBOARD %s @ %u, size %u, count %u, usage %u-%u",
+                                    f->variable ? "bits" : "array", f->offset, f->size, f->count,
+                                    f->usage_min, f->usage_max);
+                    }
+                    else
+                        hidp_debugf("KEYBOARD field ignored: more than %d fields", MAX_KBD_FIELDS);
+                }
+
                 uint16_t local_usage_at_pos[HID_LOCAL_USAGE_MAX];
                 uint8_t assignable = HIDP_MIN(report_count, (uint8_t)HID_LOCAL_USAGE_MAX);
                 uint8_t pos = 0;
@@ -616,6 +636,7 @@ bool parse_report_descriptor(const uint8_t *rep, uint16_t rep_size, hid_report_t
 							report_complete = 0;
 							report_has_input = false;
 							buttons = 0;
+							conf->keyboard.num_fields = 0;
                     }
                 }
                 else
@@ -712,6 +733,7 @@ bool parse_report_descriptor(const uint8_t *rep, uint16_t rep_size, hid_report_t
                 usage_range_set = false;
                 btns = 0;
                 buttons = 0;
+                conf->keyboard.num_fields = 0;
                 for (i = 0; i < MAX_AXES; i++)
                     axis[i] = -1;
                 hat = -1;
