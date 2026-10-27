@@ -50,6 +50,12 @@
 #define SPI_SDC_DIRECT    6   // inform core that disk image may direclty be accessed
 #define SPI_SDC_INS_LARGE 7   // inform core that some large disk image > 4GB has been insered
 #define SPI_SDC_IMAGE     8   // read rom image command
+#define SPI_SDC_FORMAT    9   // image format, sent right before SPI_SDC_INSERTED
+
+// image formats for SPI_SDC_FORMAT
+#define SPI_SDC_FORMAT_NONE     0   // not a format the core needs to know about
+#define SPI_SDC_FORMAT_DOS      1   // Apple II, DOS 3.3 sector order (.dsk, .do)
+#define SPI_SDC_FORMAT_PRODOS   2   // Apple II, ProDOS sector order (.po)
 
 // image subcommands
 #define SPI_SDC_IMAGE_STATUS  0

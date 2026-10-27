@@ -668,6 +668,27 @@ static void sdc_image_enable_direct(char drive, unsigned long start) {
   mcu_hw_spi_end();
 }
 
+// Tell the core the image format, derived from the file name extension.
+// Cores that don't know this command ignore it.
+static void sdc_image_format(char drive, const char *name) {
+  const char *dot = strrchr(name, '.');
+  unsigned char format = SPI_SDC_FORMAT_NONE;
+
+  if(dot && (!strcasecmp(dot+1, "dsk") || !strcasecmp(dot+1, "do")))
+    format = SPI_SDC_FORMAT_DOS;
+  else if(dot && !strcasecmp(dot+1, "po"))
+    format = SPI_SDC_FORMAT_PRODOS;
+
+  if(format != SPI_SDC_FORMAT_NONE)
+    sdc_debugf("DRV %d: format %d", drive, format);
+
+  sdc_spi_begin();
+  mcu_hw_spi_tx_u08(SPI_SDC_FORMAT);
+  mcu_hw_spi_tx_u08(drive);
+  mcu_hw_spi_tx_u08(format);
+  mcu_hw_spi_end();
+}
+
 static int sdc_image_inserted(char drive, FSIZE_t size) {
   // report the size of the inserted image to the core. This is needed
   // to guess sector/track/side information for floppy disk images, so the
@@ -868,7 +889,8 @@ int sdc_image_open(int drive, char *name) {
     // remember current image name
     image_name[drive] = StrDup(name);
 
-    // image has successfully been opened, so report image size to core
+    // image has successfully been opened, so report format and size to core
+    sdc_image_format(drive, name);
     sdc_image_inserted(drive, fil[drive].obj.objsize);
 
     // allow direct mapping if possible
