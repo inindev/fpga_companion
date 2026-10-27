@@ -27,6 +27,12 @@ void sys_set_val(char, int8_t);
 unsigned char sys_irq_ctrl(unsigned char);
 void sys_handle_interrupts(unsigned char, bool);
 bool sys_wait4fpga(void);
+
+// FPGA connection state, e.g. for a status LED on the companion
+#define SYS_FPGA_WAITING  0
+#define SYS_FPGA_READY    1
+#define SYS_FPGA_FAILED   2
+extern volatile uint8_t sys_fpga_state;
 char *sys_get_config(void);
 void sys_jtagsel(char);
 

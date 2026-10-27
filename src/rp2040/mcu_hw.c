@@ -1802,25 +1802,37 @@ static void wifi_task(__attribute__((unused)) void *parms) {
 #endif
 
 #ifdef WS2812_PIN
+// blue: waiting for the FPGA, green: running, red: FPGA did not answer
 #ifdef PICO_RP2350
-#define WS2812_COLOR 0x00010000  // the RP2350-Zero LED is RGB order: dim green
+// the RP2350-Zero LED is RGB order, at the lowest brightness
+#define WS2812_RED    0x01000000
+#define WS2812_GREEN  0x00010000
+#define WS2812_BLUE   0x00000100
 #else
-#define WS2812_COLOR 0x40000000  // GRBX: 25% green
+// GRBX at 25%
+#define WS2812_RED    0x00400000
+#define WS2812_GREEN  0x40000000
+#define WS2812_BLUE   0x00004000
 #endif
 
 static void ws_led_timer(__attribute__((unused)) TimerHandle_t pxTimer) {
   static char state = 0;
+  uint32_t color = WS2812_BLUE;
+  if(sys_fpga_state == SYS_FPGA_READY)  color = WS2812_GREEN;
+  if(sys_fpga_state == SYS_FPGA_FAILED) color = WS2812_RED;
+
   switch(inifile_option_get(INIFILE_OPTION_LED)) {
-  case 0:    
-    pio_sm_put_blocking(pio0, 0, state?WS2812_COLOR:0);
+  case 0:
+    pio_sm_put_blocking(pio0, 0, state?color:0);
     break;
-  case 1:    
-    pio_sm_put_blocking(pio0, 0, WS2812_COLOR);
+  case 1:
+    pio_sm_put_blocking(pio0, 0, color);
     break;
-  case 2:    
-    pio_sm_put_blocking(pio0, 0, 0);
+  case 2:
+    // off, but an error is still shown
+    pio_sm_put_blocking(pio0, 0, (sys_fpga_state == SYS_FPGA_FAILED)?color:0);
     break;
-  }    
+  }
   state = !state;
 }
 #endif

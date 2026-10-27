@@ -349,6 +349,8 @@ void sys_handle_interrupts(unsigned char pending, bool ignore_coldboot) {
 #define FPGA_BOOT_TIMEOUT   10000   /* prolonged for GW5AST138K */
 #endif
 
+volatile uint8_t sys_fpga_state = SYS_FPGA_WAITING;
+
 bool sys_wait4fpga(void) {
   sys_debugf("Waiting for FPGA to become ready");
 
@@ -365,12 +367,14 @@ bool sys_wait4fpga(void) {
 
   if(timeout) {
     sys_debugf("FPGA ready after %dms!", FPGA_BOOT_TIMEOUT-10*timeout);
+    sys_fpga_state = SYS_FPGA_READY;
 
     sys_set_rgb(0x000004);  // blue (dimmed to 1/16)
     return true;
   }
   
   sys_debugf("FPGA not ready after %d seconds!", FPGA_BOOT_TIMEOUT/1000);
+  sys_fpga_state = SYS_FPGA_FAILED;
 
   // Set LED to red. This is basically useless and will only work if the
   // FPGA receives requests but cannot answer them
