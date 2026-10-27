@@ -93,7 +93,11 @@
 #define PIN_JTAG_TDI   9
 #define PIN_JTAG_TMS  10
 #define PIN_JTAG_TDO  11
+#ifdef PICO_RP2350
+#define PIN_JTAG_TCK  14   // GP12/13 carry the debug UART on the RP2350-Zero
+#else
 #define PIN_JTAG_TCK  12
+#endif
 #define WS2812_PIN    16
 #else
 // the regular pi pico uses spi0 by default
@@ -1798,7 +1802,11 @@ static void wifi_task(__attribute__((unused)) void *parms) {
 #endif
 
 #ifdef WS2812_PIN
+#ifdef PICO_RP2350
+#define WS2812_COLOR 0x00010000  // the RP2350-Zero LED is RGB order: dim green
+#else
 #define WS2812_COLOR 0x40000000  // GRBX: 25% green
+#endif
 
 static void ws_led_timer(__attribute__((unused)) TimerHandle_t pxTimer) {
   static char state = 0;

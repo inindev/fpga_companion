@@ -119,7 +119,9 @@ elseif(${BOARD} STREQUAL WS2040ZERO)
    add_custom_command(TARGET ${PROJECT} POST_BUILD COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --cyan "Firmware has been built for Waveshare RP2040-Zero.")
 elseif(${BOARD} STREQUAL WS2350ZERO)
    # same pins and features as the RP2040-Zero; JTAG uses PIO on the RP2350
-   target_compile_definitions(${PROJECT} PRIVATE MISTLE_BOARD=2)
+   # debug UART on GP12 (TX) / GP13 (RX); JTAG TCK moves to GP14
+   target_compile_definitions(${PROJECT} PRIVATE MISTLE_BOARD=2
+      PICO_DEFAULT_UART_TX_PIN=12 PICO_DEFAULT_UART_RX_PIN=13)
    target_sources(${PROJECT} PRIVATE ../jtag.c ../gowin.c usb_jtag.c)
    target_sources(${PROJECT} PRIVATE usb_descriptors.c)
    target_sources(${PROJECT} PRIVATE pio_jtag.c)
