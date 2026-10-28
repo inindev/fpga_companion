@@ -538,6 +538,17 @@ static int sanitize_trigger_axis(const UsbGamepadMap *map, int axis_idx,
   return axis_idx;
 }
 
+// SDL numbers a device's axes in HID usage order (X, Y, Z, Rx, Ry, Rz),
+// counting only the axes present, wherever they sit in the report. The
+// parser stores axes in that order in axis[], so SDL axis n is the n-th
+// axis[] slot in use.
+static int sdl_axis_slot(const hid_report_t *report, int sdl_idx) {
+  for (int slot = 0; slot < MAX_AXES; slot++)
+    if (report->joystick_mouse.axis[slot].size > 0 && sdl_idx-- == 0)
+      return slot;
+  return -1;
+}
+
 void parse_with_sdl_mapping(const hid_report_t *report,
                             struct hid_joystick_state_S *state,
                             const unsigned char *buffer, int nbytes,
@@ -560,8 +571,8 @@ void parse_with_sdl_mapping(const hid_report_t *report,
     }                                                                         \
     else                                                                      \
     {                                                                         \
-      /* re-assign index as the parser may have re-ordered the axes */	      \
-      int pidx_ = report->joystick_mouse.axis[(idx_)].index;                  \
+      /* map the SDL axis number to the parser's axis slot */                 \
+      int pidx_ = sdl_axis_slot(report, (idx_));                              \
       if ((pidx_) < 0)                                                        \
       {                                                                       \
         (out_u8_) = 0x80; /* neutral fallback */                              \
@@ -769,6 +780,12 @@ void parse_with_sdl_mapping(const hid_report_t *report,
       btn_extra |= 0x20;
   }
 
+  // triggers that are plain buttons instead of axes, e.g. on PS1-style pads
+  if (READ_BUTTON_IDX(map->btn_lt))
+    btn_extra |= 0x10;
+  if (READ_BUTTON_IDX(map->btn_rt))
+    btn_extra |= 0x20;
+
   if (READ_BUTTON_IDX(map->btn_leftstick))
     btn_extra |= 0x40;
   if (READ_BUTTON_IDX(map->btn_rightstick))
@@ -798,7 +815,7 @@ void parse_with_sdl_mapping(const hid_report_t *report,
 void hid_parse(const hid_report_t *report, hid_state_t *state, uint8_t const* data, uint16_t len) {
   //  usb_debugf("hid parse %d, expect %d", len, report->report_size);
   if(!len) return;
-  
+
   // hexdump((void*)data, len);
 
   // the following is a hack for the Rii keyboard/touch combos to use the
