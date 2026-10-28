@@ -436,10 +436,9 @@ static void xbox_parse(struct xbox_info_S *xbox) {
     xbox->last_state_y = ay;
     usb_debugf("XBOX Joy%d: B %02x EB %02x X %02x Y %02x", xbox->js_index, state, state_btn_extra, ax, ay);
 
-    if(osd_is_visible()) {	       
-      // if OSD is visible, then process events locally
-      menu_joystick_state(state);
-    } else {
+    // the menu tracks the state even while closed, and uses it when visible
+    menu_joystick_state(state, osd_is_visible());
+    if(!osd_is_visible()) {
     mcu_hw_spi_begin();
     mcu_hw_spi_tx_u08(SPI_TARGET_HID);
     mcu_hw_spi_tx_u08(SPI_HID_JOYSTICK);

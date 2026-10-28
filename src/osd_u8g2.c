@@ -103,6 +103,15 @@ void osd_enable(char en) {
   mcu_hw_spi_end();  
 }
 
+void osd_strip(int on) {
+  // bit 0 shows the OSD, bit 1 selects the strip at the bottom of the screen
+  mcu_hw_spi_begin();
+  mcu_hw_spi_tx_u08(SPI_TARGET_OSD);
+  mcu_hw_spi_tx_u08(SPI_OSD_ENABLE);
+  mcu_hw_spi_tx_u08(on ? 3 : 0);
+  mcu_hw_spi_end();
+}
+
 void osd_init(void) {
   // prepare u8g2
   // osd.spi->dev->user_data = osd.buf;

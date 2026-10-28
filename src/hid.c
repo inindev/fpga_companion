@@ -32,6 +32,26 @@ void hid_release_joystick(uint8_t idx) {
   usb_debugf("Releasing joystick %d (map = %02x)", idx, joystick_map);
 }
 
+// Volume keys as set by INIFILE_OPTION_VOLKEYS: -1 = down, 1 = up, 0 = not a volume key
+static int kbd_volume_key(uint8_t modifiers, uint16_t usage) {
+  switch(inifile_option_get(INIFILE_OPTION_VOLKEYS)) {
+  case 1:   // F9 / F10
+    if(usage == 0x42) return -1;
+    if(usage == 0x43) return 1;
+    break;
+  case 2:   // Ctrl + '-' / '='
+    if(modifiers & 0x11) {
+      if(usage == 0x2d) return -1;
+      if(usage == 0x2e) return 1;
+    }
+    break;
+  }
+  return 0;
+}
+
+// keys taken as volume keys, so their release isn't passed to the core either
+static uint8_t kbd_volume_held[32];
+
 void kbd_parse_usage_state(struct hid_kbd_state_S *state, uint8_t modifiers,
                            const uint8_t keys[32])
 {
@@ -54,12 +74,24 @@ void kbd_parse_usage_state(struct hid_kbd_state_S *state, uint8_t modifiers,
       continue;
 
     if (!is_pressed) {
+      if (kbd_volume_held[usage / 8] & (1U << (usage % 8))) {
+        kbd_volume_held[usage / 8] &= ~(1U << (usage % 8));
+        continue;
+      }
       if (!osd_is_visible()) {
         if (usage != inifile_option_get(INIFILE_OPTION_HOTKEY))
           kbd_tx_hid_ps2_break((uint8_t)usage, 0);
       } else {
         menu_notify(MENU_EVENT_KEY_RELEASE);
       }
+      continue;
+    }
+
+    // volume keys work with and without the menu and never reach the core
+    int vol = kbd_volume_key(modifiers, usage);
+    if (vol) {
+      kbd_volume_held[usage / 8] |= (1U << (usage % 8));
+      menu_notify(vol > 0 ? MENU_EVENT_VOLUME_UP : MENU_EVENT_VOLUME_DOWN);
       continue;
     }
 
@@ -74,6 +106,8 @@ void kbd_parse_usage_state(struct hid_kbd_state_S *state, uint8_t modifiers,
       } else {
         if (usage == 0x51) msg = MENU_EVENT_DOWN;
         if (usage == 0x52) msg = MENU_EVENT_UP;
+        if (usage == 0x50) msg = MENU_EVENT_LEFT;
+        if (usage == 0x4f) msg = MENU_EVENT_RIGHT;
         if (usage == 0x4e) msg = MENU_EVENT_PGDOWN;
         if (usage == 0x4b) msg = MENU_EVENT_PGUP;
         if (usage == 0x2c || usage == 0x28) msg = MENU_EVENT_SELECT;
@@ -256,36 +290,56 @@ void mouse_parse(const hid_report_t *report, __attribute__((unused)) struct hid_
   mcu_hw_spi_end();
 }
 
-static void joystick_push(uint8_t index, uint8_t joy, uint8_t ax, uint8_t ay, uint8_t btn_extra) {    
-  // check if there's a gamepad menu button enabled in the config
+// btn_extra bits from the gamepad mappings
+#define BTN_EXTRA_LB      0x01
+#define BTN_EXTRA_RB      0x02
+#define BTN_EXTRA_BACK    0x04   // Select
+#define BTN_EXTRA_START   0x08
+#define BTN_EXTRA_LT      0x10
+#define BTN_EXTRA_RT      0x20
+
+static void joystick_push(uint8_t index, uint8_t joy, uint8_t ax, uint8_t ay, uint8_t btn_extra) {
+  // gamepad menu button: GAMEPAD_TRIGGER in config.ini (a button number) if set,
+  // else the padmenu option
+  static bool last_menu = false;
+  bool menu = false;
+
   if(inifile_config_has("menu", "gamepad_trigger")) {
     int btn = inifile_config_get_int("menu", "gamepad_trigger", 0);
 
     // buttons 0..3 are encoded in the upper bits of 'joy', further
     // 8 buttons are in btn_extra
-
-    static bool last_detected = false;
-    bool detected = false;
-    if(btn < 4) {
-      if(joy & (1<<(btn+4)))
-	detected = true;      
-    } else if(btn < 12) {
-      if(btn_extra & (1<<(btn-4)))
-	detected = true;      
-    }
-
-    if(detected && !last_detected) {
-      usb_debugf("menu trigger pressed");
-      menu_notify(MENU_EVENT_TOGGLE);
-    }
-
-    last_detected = detected;
-  }
-      
-  if(osd_is_visible()) {
-    // if OSD is visible, then process events locally
-    menu_joystick_state(joy);	      
+    if(btn < 4)       menu = joy & (1<<(btn+4));
+    else if(btn < 12) menu = btn_extra & (1<<(btn-4));
   } else {
+    switch(inifile_option_get(INIFILE_OPTION_PADMENU)) {
+    case 1: menu = (btn_extra & (BTN_EXTRA_BACK | BTN_EXTRA_START)) == (BTN_EXTRA_BACK | BTN_EXTRA_START); break;
+    case 2: menu = btn_extra & BTN_EXTRA_START; break;
+    case 3: menu = btn_extra & BTN_EXTRA_BACK; break;
+    }
+  }
+
+  if(menu && !last_menu) {
+    usb_debugf("menu trigger pressed");
+    menu_notify(MENU_EVENT_TOGGLE);
+  }
+  last_menu = menu;
+
+  // volume: hold Select and press L or R (shoulder or trigger, whichever the pad has)
+  static bool last_down = false, last_up = false;
+  bool sel = inifile_option_get(INIFILE_OPTION_PADVOL) && (btn_extra & BTN_EXTRA_BACK);
+  bool down = sel && (btn_extra & (BTN_EXTRA_LB | BTN_EXTRA_LT));
+  bool up   = sel && (btn_extra & (BTN_EXTRA_RB | BTN_EXTRA_RT));
+  if(down && !last_down) menu_notify(MENU_EVENT_VOLUME_DOWN);
+  if(up && !last_up)     menu_notify(MENU_EVENT_VOLUME_UP);
+  last_down = down;
+  last_up = up;
+
+  // the menu tracks the gamepad state even while closed, so a button still
+  // held from before doesn't count as a new press once it opens
+  menu_joystick_state(joy, osd_is_visible());
+
+  if(!osd_is_visible()) {
     mcu_hw_spi_begin();
     mcu_hw_spi_tx_u08(SPI_TARGET_HID);
     mcu_hw_spi_tx_u08(SPI_HID_JOYSTICK);
@@ -878,6 +932,6 @@ void hid_handle_event(void) {
   // the OSD is open. Mask out the second fire button
   // as the wirless cx40+ sends it wrongly while
   // no other db9 joystick seems to send it at all.
-  if(osd_is_visible())
-    menu_joystick_state(db9 & 0x1f);
+  // the single fire button (0x10) selects in the menu, like a gamepad's left button
+  menu_joystick_state((db9 & 0x0f) | ((db9 & 0x10) ? 0x40 : 0), osd_is_visible());
 }

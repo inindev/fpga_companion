@@ -108,6 +108,28 @@ typedef struct {
 static menu_state_t *menu_state = NULL;
 static fsel_state_t fsel_state;
 
+// settings changed through the menu or hotkeys since the last save
+static bool menu_dirty = false;
+
+// "Apply and restart?" question, asked when leaving a page with waiting changes
+static struct {
+  bool open;
+  int sel;      // 0 = Apply, 1 = Discard
+  bool close;   // close the menu afterwards, else go back one page
+} confirm;
+
+// hidden lists (hidden="true") are kept and saved, but not shown
+static bool menu_entry_visible(const config_menu_entry_t *e) {
+  return !(e->type == CONFIG_MENU_ENTRY_LIST && (e->list->flags & CONFIG_LIST_HIDDEN));
+}
+
+// n-th visible entry of a menu
+static config_menu_entry_t *menu_entry_nth(const config_menu_t *menu, int n) {
+  for(config_menu_entry_t *e = menu->entries; e; e = e->next)
+    if(menu_entry_visible(e) && n-- == 0) return e;
+  return NULL;
+}
+
 /* =========== handling of variables ============= */
 static menu_variable_t *variables = NULL;
 
@@ -233,10 +255,16 @@ void menu_set_value(unsigned char id, int8_t value) {
 // various 8x8 icons
 static const unsigned char icn_right_bits[]  = { 0x00,0x04,0x0c,0x1c,0x3c,0x1c,0x0c,0x04 };
 static const unsigned char icn_left_bits[]   = { 0x00,0x20,0x30,0x38,0x3c,0x38,0x30,0x20 };
-static const unsigned char icn_floppy_bits[] = { 0xff,0x81,0x83,0x81,0xbd,0xad,0x6d,0x3f };
 static const unsigned char icn_empty_bits[] =  { 0xc3,0xe7,0x7e,0x3c,0x3c,0x7e,0xe7,0xc3 };
 static const unsigned char icn_on_bits[] =     { 0x3c,0x42,0x99,0xbd,0xbd,0x99,0x42,0x3c };
 static const unsigned char icn_off_bits[] =    { 0x3c,0x42,0x81,0x81,0x81,0x81,0x42,0x3c };
+static const unsigned char icn_restart_bits[] = { 0x5c,0x62,0x71,0x01,0x41,0x22,0x1c };  // 7x7, setting restarts the core
+static const unsigned char icn_val_left_bits[] = { 0x08,0x0c,0x0e,0x0f,0x0e,0x0c,0x08 }; // 4x7, value can step down
+static const unsigned char icn_val_right_bits[] = { 0x01,0x03,0x07,0x0f,0x07,0x03,0x01 };// 4x7, value can step up
+// volume bar speaker: body (4x8), two sound waves (4x8), or a small X when muted (4x8)
+static const unsigned char icn_speaker_bits[]  = { 0x08,0x0c,0x0f,0x0f,0x0f,0x0f,0x0c,0x08 };
+static const unsigned char icn_sound_bits[]    = { 0x00,0x04,0x09,0x0a,0x0a,0x09,0x04,0x00 };
+static const unsigned char icn_mute_bits[]     = { 0x00,0x00,0x09,0x06,0x06,0x09,0x00,0x00 };
 
 void u8g2_DrawStrT(u8g2_t *u8g2, u8g2_uint_t x, u8g2_uint_t y, const char *s) {
   // get length of string
@@ -271,16 +299,21 @@ static sdc_dir_entry_t *dir_entry(sdc_dir_entry_t *d, int n) {
   return d;
 }
 
+// file selector row width, leaving room for the scroll bar when needed
+static int menu_fsel_width(void) {
+  return u8g2_GetDisplayWidth(&u8g2) - (dir_len(menu_state->dir) > 4 ? 3 : 0);
+}
+
 static void menu_fs_scroll_entry(void) {
   // no scrolling
   if(fs_scroll_cur < 0) return;
-  
+
   // don't scroll anything else
   if(menu_state->type != MENU_TYPE_FILESELECTOR) return;
-  
+
   int row = menu_state->selected - 1;
   int y =  MENU_LINE_Y + MENU_ENTRY_H * (row-menu_state->scroll+1);
-  int width = u8g2_GetDisplayWidth(&u8g2);
+  int width = menu_fsel_width();
 
   // jump to the row'th entry in the dir listing
   int swid = u8g2_GetStrWidth(&u8g2, dir_entry(menu_state->dir, row)->name) + 1;
@@ -311,8 +344,8 @@ static void menu_fs_draw_entry(int row, sdc_dir_entry_t *entry) {
   static const unsigned char empty_icon[] =  { 0xc3,0xe7,0x7e,0x3c,0x3c,0x7e,0xe7,0xc3 };
 
   int y =  MENU_LINE_Y + MENU_ENTRY_H * (row+1);
-  int width = u8g2_GetDisplayWidth(&u8g2);
-  
+  int width = menu_fsel_width();
+
   if(entry->name[0] == '/') {
     if(fsel_state.none_str) u8g2_DrawStr(&u8g2, FS_ICON_WIDTH, y, fsel_state.none_str);
     else                    u8g2_DrawStr(&u8g2, FS_ICON_WIDTH, y, "No Disk");
@@ -362,11 +395,8 @@ static void menu_push(void) {
 
 static int menu_len(const config_menu_t *menu) {
   int entries = 0;
-  config_menu_entry_t *me = menu->entries;
-  while(me) {
-    entries++;
-    me = me->next;
-  }
+  for(config_menu_entry_t *me = menu->entries; me; me = me->next)
+    if(menu_entry_visible(me)) entries++;
   return entries;
 }
 
@@ -388,23 +418,19 @@ static bool menu_is_root(const config_menu_t *menu) {
   return menu == cfg->menu;
 }
 
-static int menu_entry_is_usable(void) {
-  // not root menu? Then all entries are usable. Root menu
-  // title is only usable if no hid keyboard or gamepad is present
-  if(!menu_is_root(menu_state->menu) || !mcu_hw_hid_present()) return 1;
-
-  // in root menu only the title is unusable
-  return menu_state->selected != 0;
+// The title row works as "back". In the main menu it would close the menu,
+// so there it's only used in single button mode (no keyboard or gamepad).
+static int menu_title_is_usable(void) {
+  bool root = menu_state->type == MENU_TYPE_MENU && menu_is_root(menu_state->menu);
+  return !root || !mcu_hw_hid_present();
 }
 
 static config_menu_entry_t *menu_get_selected_entry(void) {
-  // first check if there's a menu at all  
-  if(menu_state->type != MENU_TYPE_MENU)
+  // first check if there's a menu at all
+  if(menu_state->type != MENU_TYPE_MENU || menu_state->selected == 0)
     return NULL;
-  
-  config_menu_entry_t *entry = menu_state->menu->entries;
-  for(int i=0;i<menu_state->selected - 1;i++) entry=entry->next;
-  return entry;
+
+  return menu_entry_nth(menu_state->menu, menu_state->selected - 1);
 }
   
 static void menu_entry_go(int step) {
@@ -422,40 +448,40 @@ static void menu_entry_go(int step) {
     return;
   }							  
   
-  int entries = menu_count_entries();
-  do {
-    menu_state->selected += step;
-    
-    // single step wraps top/bottom, paging does not
-    if(abs(step) == 1) {    
-      if(menu_state->selected < 0) menu_state->selected = entries + menu_state->selected;
-      if(menu_state->selected >= entries) menu_state->selected = menu_state->selected - entries;
-    } else {
-      // limit to top/bottom. Afterwards step 1 in opposite
-      // direction to skip unusable entries
-      if(menu_state->selected < 1) { menu_state->selected = 1; step = 1; }	
-      if(menu_state->selected >= entries) { menu_state->selected = entries - 1; step = -1; }
-    }
+  int entries = menu_count_entries();   // incl. the title row
+  int first = menu_title_is_usable() ? 0 : 1;
+  if(entries - 1 < first) return;       // nothing to move to, e.g. About
 
-    // scrolling needed?
-    if(step > 0) {
-      if(entries <= 5)                            menu_state->scroll = 0;
-      else {
-	if(menu_state->selected <= 3)             menu_state->scroll = 0;
-	else if(menu_state->selected < entries-2) menu_state->scroll = menu_state->selected - 3;
-	else                                      menu_state->scroll = entries-5;
-      }
-    }
+  int sel = menu_state->selected + step;
+  if(!mcu_hw_hid_present() && abs(step) == 1) {
+    // single button mode can only step down, so it wraps around
+    if(sel >= entries) sel = first;
+    if(sel < first)    sel = entries - 1;
+  } else {
+    // stop at the top and bottom
+    if(sel < first)    sel = first;
+    if(sel >= entries) sel = entries - 1;
+  }
+  menu_state->selected = sel;
 
-    if(step < 0) {
-      if(entries <= 5)                            menu_state->scroll = 0;
-      else {
-	if(menu_state->selected <= 2)             menu_state->scroll = 0;
-	else if(menu_state->selected < entries-3) menu_state->scroll = menu_state->selected - 2;
-	else                                      menu_state->scroll = entries-5;
-      }
-    }    
-  } while(!menu_entry_is_usable());
+  // scrolling needed?
+  if(step > 0) {
+    if(entries <= 5)                            menu_state->scroll = 0;
+    else {
+      if(menu_state->selected <= 3)             menu_state->scroll = 0;
+      else if(menu_state->selected < entries-2) menu_state->scroll = menu_state->selected - 3;
+      else                                      menu_state->scroll = entries-5;
+    }
+  }
+
+  if(step < 0) {
+    if(entries <= 5)                            menu_state->scroll = 0;
+    else {
+      if(menu_state->selected <= 2)             menu_state->scroll = 0;
+      else if(menu_state->selected < entries-3) menu_state->scroll = menu_state->selected - 2;
+      else                                      menu_state->scroll = entries-5;
+    }
+  }
 }
 
 static void menu_draw_title(const char *s, bool arrow, bool selected) {
@@ -503,9 +529,24 @@ static char *menuentry_get_label(config_menu_entry_t *entry) {
     return entry->toggle->label;
   if(entry->type == CONFIG_MENU_ENTRY_RANGE)
     return entry->range->label;
-  
+  if(entry->type == CONFIG_MENU_ENTRY_OPTION)
+    return entry->option->label;
+  if(entry->type == CONFIG_MENU_ENTRY_INFO)
+    return entry->info->label;
+
   return NULL;
 }
+
+// index of an option's current value in its choices, -1 if it's none of them
+static int menu_option_index(const config_option_t *o) {
+  int value = inifile_option_get(o->option);
+  for(int i=0;i<o->count;i++)
+    if((o->values ? o->values[i] : i) == value) return i;
+  return -1;
+}
+
+// list value shown and changed in the menu: a waiting (pending) one if there is
+static int menu_list_value(const config_list_t *list);
   
 static char *menu_get_listentry(config_menu_entry_t *entry, int value) {
   if(!entry || entry->type != CONFIG_MENU_ENTRY_LIST) return NULL;
@@ -520,7 +561,19 @@ static char *menu_get_listentry(config_menu_entry_t *entry, int value) {
   return NULL;
 }
 
-static void menu_draw_entry(config_menu_entry_t *entry, int row, bool selected) {
+// copy s into buf, shortened with "..." to fit maxw pixels
+static void menu_fit_str(char *buf, int size, const char *s, int maxw) {
+  snprintf(buf, size, "%s", s);
+  if(u8g2_GetStrWidth(&u8g2, buf) <= maxw) return;
+
+  int dotlen = u8g2_GetStrWidth(&u8g2, "...");
+  int n = strlen(buf);
+  while(n > 0 && u8g2_GetStrWidth(&u8g2, buf) > maxw - dotlen) buf[--n] = 0;
+  if(n + 4 <= size) strcat(buf, "...");
+}
+
+// width is the row width, smaller than the display when a scroll bar is shown
+static void menu_draw_entry(config_menu_entry_t *entry, int row, bool selected, int width) {
   menu_debugf("row %d: %s '%s'", row,
 	      config_menuentry_get_type_str(entry),
 	      menuentry_get_label(entry));
@@ -528,74 +581,88 @@ static void menu_draw_entry(config_menu_entry_t *entry, int row, bool selected) 
   // all menu entries use some kind of label
   char *s = menuentry_get_label(entry);
   int ypos = MENU_LINE_Y+MENU_ENTRY_H + MENU_ENTRY_H * row;
-  int width = u8g2_GetDisplayWidth(&u8g2);
-  
-  // all menu entries are a plain text
+
   u8g2_DrawStr(&u8g2, 1, ypos, s);
-    
-  // prepare highlight
-  int hl_w = width;
+  int lend = 1 + u8g2_GetStrWidth(&u8g2, s);
 
-  // handle second string for list entries
-  if(entry->type == CONFIG_MENU_ENTRY_LIST) {
-    // get matching variable
-    int value = menu_variable_get(entry->list->id);
-    char *str = menu_get_listentry(entry, value);
-
-    if(str) {
-      // right align entry
-      int sw = u8g2_GetStrWidth(&u8g2, str) + 1;
-      if(sw > width/2) sw = width/2;
-      u8g2_DrawStr(&u8g2, width-sw, ypos, str);
-    }
-		  
-    hl_w = width/2;
+  // mark settings that run an action when changed, e.g. restart the core
+  if(entry->type == CONFIG_MENU_ENTRY_LIST && entry->list->action) {
+    u8g2_DrawXBM(&u8g2, lend+3, ypos-8, 7, 7, icn_restart_bits);
+    lend += 10;
   }
-  
-  // some entries have a small icon to the right    
-  else if(entry->type == CONFIG_MENU_ENTRY_MENU)
-    u8g2_DrawXBM(&u8g2, hl_w-8, ypos-8, 8, 8, icn_right_bits);
 
-  else if(entry->type == CONFIG_MENU_ENTRY_FILESELECTOR) {
-    // icon depends if floppy is inserted
-    u8g2_DrawXBM(&u8g2, hl_w-MENU_ENTRY_BASE, ypos-8, 8, 8,
-		 sdc_get_image_name(entry->fsel->index)?icn_floppy_bits:icn_empty_bits);
-  }
-  
-  else if(entry->type == CONFIG_MENU_ENTRY_TOGGLE) 
-    u8g2_DrawXBM(&u8g2, hl_w-MENU_ENTRY_BASE, ypos-8, 8, 8,
+  // the value shown on the right; settings that Left/Right can change get arrows
+  const char *value = NULL;
+  bool adjustable = false;
+  char num[8];
+
+  switch(entry->type) {
+  case CONFIG_MENU_ENTRY_LIST:
+    value = menu_get_listentry(entry, menu_list_value(entry->list));
+    adjustable = true;
+    break;
+
+  case CONFIG_MENU_ENTRY_OPTION: {
+    int i = menu_option_index(entry->option);
+    if(i >= 0) value = entry->option->labels[i];
+    else { snprintf(num, sizeof(num), "%d", inifile_option_get(entry->option->option)); value = num; }
+    adjustable = true;
+  } break;
+
+  case CONFIG_MENU_ENTRY_RANGE:
+    snprintf(num, sizeof(num), "%d", menu_variable_get(entry->range->id));
+    value = num;
+    adjustable = true;
+    break;
+
+  case CONFIG_MENU_ENTRY_INFO:
+    value = entry->info->text();
+    break;
+
+  case CONFIG_MENU_ENTRY_FILESELECTOR:
+    value = sdc_get_image_name(entry->fsel->index);
+    if(!value) value = "-";
+    break;
+
+  case CONFIG_MENU_ENTRY_IMAGE:
+    value = sdc_get_image_name(entry->image->index+MAX_DRIVES);
+    if(!value) value = entry->image->none_str ? entry->image->none_str : "-";
+    break;
+
+  case CONFIG_MENU_ENTRY_MENU:
+    u8g2_DrawXBM(&u8g2, width-8, ypos-8, 8, 8, icn_right_bits);
+    break;
+
+  case CONFIG_MENU_ENTRY_TOGGLE:
+    u8g2_DrawXBM(&u8g2, width-9, ypos-8, 8, 8,
 		 menu_variable_get(entry->toggle->id)?icn_on_bits:icn_off_bits);
-  
-  if(entry->type == CONFIG_MENU_ENTRY_IMAGE) {
-    const unsigned char *icon = sdc_get_image_name(entry->image->index+MAX_DRIVES)?icn_floppy_bits:
-      entry->image->none_icn?entry->image->none_icn:
-      icn_empty_bits;
-    
-    u8g2_DrawXBM(&u8g2, hl_w-MENU_ENTRY_BASE, ypos-8, 8, 8, icon);
+    break;
   }
-    
-  else if(entry->type == CONFIG_MENU_ENTRY_RANGE) {
-    char str[5];  // max length 5 for "-100\0"
-    
-    // draw range value
-    int value = menu_variable_get(entry->range->id);
-    sprintf(str, "%d", value);
 
-    // right align entry
-    int sw = u8g2_GetStrWidth(&u8g2, str) + 1;
-    if(sw > width/2) sw = width/2;
-    u8g2_DrawStr(&u8g2, width-sw, ypos, str);
-
-    // in "normal" menu mode, the entire range is highlighted when
-    // selected. In "edit" mode only the value is highlighted
-    if(entry->range->edit) {    
-      // only highlight the value
-      hl_w = u8g2_GetStrWidth(&u8g2, str) + 1;      
+  if(value) {
+    bool arrows = selected && adjustable;
+    char str[48];
+    menu_fit_str(str, sizeof(str), value, width - lend - 5 - (arrows ? 12 : 0));
+    int vx = width - 1 - u8g2_GetStrWidth(&u8g2, str) - (arrows ? 6 : 0);
+    u8g2_DrawStr(&u8g2, vx, ypos, str);
+    if(arrows) {
+      u8g2_DrawXBM(&u8g2, vx-6, ypos-8, 4, 7, icn_val_left_bits);
+      u8g2_DrawXBM(&u8g2, width-5, ypos-8, 4, 7, icn_val_right_bits);
     }
   }
-    
+
   if(selected)
-    u8g2_DrawButtonFrame(&u8g2, width-hl_w, ypos, U8G2_BTN_INV, hl_w, 1, 1);
+    u8g2_DrawButtonFrame(&u8g2, 0, ypos, U8G2_BTN_INV, width, 1, 1);
+}
+
+// scroll bar on the right when a page has more than four rows
+static void menu_draw_scrollbar(int entries, int scroll) {
+  if(entries <= 4) return;
+  int top = MENU_LINE_Y + 1, track = 64 - top;
+  for(int y = top + 1; y < 64; y += 2) u8g2_DrawPixel(&u8g2, 127, y);
+  int th = track * 4 / entries;
+  if(th < 6) th = 6;
+  u8g2_DrawBox(&u8g2, 126, top + (track - th) * scroll / (entries - 4), 2, th);
 }
 
 // Draws msg centered in lines no wider than the display, from y_in down, and
@@ -718,11 +785,16 @@ static void menu_draw(const config_menu_t *menu, int selected, int scroll) {
   // draw the title
   menu_draw_title(menu->label, !menu_is_root(menu), selected == 0);
 
-  config_menu_entry_t *entry = menu->entries;
-  for(int i=0;i<scroll;i++) entry=entry->next;  // skip first "scroll" entries
-  for(int i=0;i<4 && entry;i++,entry=entry->next)           // then draw up to four entries
-    menu_draw_entry(entry, i, selected == scroll+i+1);    
-  
+  // draw up to four visible entries from "scroll" on
+  int entries = menu_len(menu);
+  int width = u8g2_GetDisplayWidth(&u8g2) - (entries > 4 ? 3 : 0);
+  for(int i=0;i<4;i++) {
+    config_menu_entry_t *entry = menu_entry_nth(menu, scroll+i);
+    if(!entry) break;
+    menu_draw_entry(entry, i, selected == scroll+i+1, width);
+  }
+  menu_draw_scrollbar(entries, scroll);
+
   u8g2_SendBuffer(&u8g2);
 }
 
@@ -737,10 +809,11 @@ static void menu_fsel_draw(const char *label, sdc_dir_entry_t *dir, int selected
   fs_scroll_cur = -1;
 
   // draw up to four entries
-  for(int i=0;i<4 && i<dir_len(dir)-scroll;i++) {            
+  for(int i=0;i<4 && i<dir_len(dir)-scroll;i++) {
     menu_debugf("file %s", dir_entry(dir, i+scroll)->name);
     menu_fs_draw_entry(i, dir_entry(dir, i+scroll));
   }
+  menu_draw_scrollbar(dir_len(dir), scroll);
   u8g2_SendBuffer(&u8g2);
 }
 
@@ -879,6 +952,7 @@ static void menu_fileselector_select(sdc_dir_entry_t *entry) {
       menu_pop();
       // Eject
       sdc_image_open(drive, NULL);
+      menu_dirty = true;
     } else {	
       // check if we are going up one dir and try to select the
       // directory we are coming from
@@ -914,7 +988,8 @@ static void menu_fileselector_select(sdc_dir_entry_t *entry) {
   } else {
     // request insertion of this image
     sdc_image_open(drive, entry->name);
-    
+    menu_dirty = true;
+
     // return to parent form
     menu_pop();
 
@@ -957,6 +1032,153 @@ void menu_run_current_image_action(void) {
 
 }
 
+/* ============ changing values, waiting changes and saving ============ */
+
+static int menu_list_value(const config_list_t *list) {
+  return (list->pending >= 0) ? list->pending : menu_variable_get(list->id);
+}
+
+// step a list to the previous (-1) or next (1) entry, in list order. Select
+// wraps around at the ends, Left/Right stop there. Lists with an action
+// (e.g. a restart) only take effect once the page is left, see menu_leave().
+static void menu_list_step(config_menu_entry_t *entry, int dir, bool wrap) {
+  config_list_t *list = entry->list;
+  int value = menu_list_value(list);
+
+  config_listentry_t *cur = list->listentries, *prev = NULL, *last = NULL;
+  for(config_listentry_t *le = list->listentries; le; le = le->next) {
+    if(le->value == value) { cur = le; break; }
+    prev = le;
+  }
+  if(!cur) return;
+  if(dir < 0 && !prev) for(prev = cur; prev; prev = prev->next) last = prev;  // last entry
+
+  config_listentry_t *next = (dir > 0) ? (cur->next ? cur->next : (wrap ? list->listentries : NULL))
+                                       : (prev ? prev : (wrap ? last : NULL));
+  if(!next || next == cur) return;
+
+  if(list->action)
+    list->pending = (next->value == menu_variable_get(list->id)) ? -1 : next->value;
+  else {
+    menu_variable_set(list->id, next->value);
+    menu_dirty = true;
+  }
+}
+
+static void menu_option_step(config_option_t *o, int dir, bool wrap) {
+  int i = menu_option_index(o) + dir;
+  if(i < 0)         i = wrap ? o->count-1 : 0;
+  if(i >= o->count) i = wrap ? 0 : o->count-1;
+  inifile_option_set(o->option, o->values ? o->values[i] : i);
+  menu_dirty = true;
+}
+
+static void menu_range_step(config_range_t *r, int dir) {
+  int value = menu_variable_get(r->id) + dir;
+  if(value > r->max) value = r->max;
+  if(value < r->min) value = r->min;
+  menu_variable_set(r->id, value);
+  menu_dirty = true;
+}
+
+// does the current page have changes waiting to be applied?
+static bool menu_page_pending(void) {
+  if(menu_state->type != MENU_TYPE_MENU) return false;
+  for(config_menu_entry_t *e = menu_state->menu->entries; e; e = e->next)
+    if(e->type == CONFIG_MENU_ENTRY_LIST && e->list->pending >= 0) return true;
+  return false;
+}
+
+// the core's settings file, from its "save" action
+static char *menu_save_file(void) {
+  for(config_action_t *a = cfg->actions; a; a = a->next)
+    for(config_action_command_t *c = a->commands; c; c = c->next)
+      if(c->code == CONFIG_ACTION_COMMAND_SAVE) return c->filename;
+  return NULL;
+}
+
+// save changed settings without a message, like the core's Save button but silent
+static void menu_autosave(void) {
+  if(!menu_dirty) return;
+  char *file = menu_save_file();
+  if(!file) return;
+  if(inifile_write(file) == 0) menu_dirty = false;
+  else menu_draw_dialog("Settings", "save failed");
+}
+
+static void menu_close(void) {
+  menu_timer_enable(false);
+  menu_autosave();
+  osd_enable(OSD_INVISIBLE);
+}
+
+// apply or drop the waiting changes of a page. Applying sets them all, saves,
+// then runs each of their actions once, e.g. one restart for several settings.
+static void menu_apply_pending(const config_menu_t *menu, bool apply) {
+  config_action_t *actions[8];
+  int n = 0;
+
+  for(config_menu_entry_t *e = menu->entries; e; e = e->next) {
+    if(e->type != CONFIG_MENU_ENTRY_LIST || e->list->pending < 0) continue;
+    if(apply) {
+      menu_variable_set(e->list->id, e->list->pending);
+      menu_dirty = true;
+      int i;
+      for(i=0;i<n && actions[i] != e->list->action;i++);
+      if(i == n && n < 8) actions[n++] = e->list->action;
+    }
+    e->list->pending = -1;
+  }
+
+  if(!apply) return;
+  menu_autosave();
+  for(int i=0;i<n;i++) sys_run_action(actions[i]);
+}
+
+static void menu_confirm_choose(bool apply) {
+  const config_menu_t *page = menu_state->menu;
+  bool close = confirm.close;
+  confirm.open = false;
+
+  // leave the page first, the actions may hide the OSD
+  if(!close) menu_pop();
+  menu_apply_pending(page, apply);
+  if(close && osd_is_visible()) menu_close();
+}
+
+static void menu_confirm_draw(void) {
+  u8g2_ClearBuffer(&u8g2);
+  u8g2_DrawFrame(&u8g2, 3, 3, 122, 58);
+  u8g2_SetFont(&u8g2, u8g2_font_helvB08_tr);
+  const char *title = "Restart needed";
+  u8g2_DrawStr(&u8g2, (128 - u8g2_GetStrWidth(&u8g2, title))/2, 17, title);
+  u8g2_SetFont(&u8g2, font_helvR08_te);
+  const char *msg = "Apply and restart?";
+  u8g2_DrawStr(&u8g2, (128 - u8g2_GetStrWidth(&u8g2, msg))/2, 31, msg);
+
+  const char *btn[2] = { "Apply", "Discard" };
+  for(int i=0;i<2;i++) {
+    int bx = 12 + i*56;
+    u8g2_DrawFrame(&u8g2, bx, 40, 48, 14);
+    u8g2_DrawStr(&u8g2, bx + (48 - u8g2_GetStrWidth(&u8g2, btn[i]))/2, 51, btn[i]);
+    if(i == confirm.sel) {
+      u8g2_SetDrawColor(&u8g2, 2);
+      u8g2_DrawBox(&u8g2, bx, 40, 48, 14);
+      u8g2_SetDrawColor(&u8g2, 1);
+    }
+  }
+  u8g2_SendBuffer(&u8g2);
+}
+
+// close the menu, asking first if the page has waiting changes
+static void menu_leave_all(void) {
+  if(menu_page_pending()) {
+    confirm.open = true; confirm.sel = 0; confirm.close = true;
+    return;
+  }
+  menu_close();
+}
+
 // user has pressed esc to go back one level
 static void menu_back(void) {
   // when in range edit mode, back leaves edit mode
@@ -969,9 +1191,16 @@ static void menu_back(void) {
   // stop doing the scroll timer
   menu_timer_enable(false);
 
+  // leaving a page with waiting changes asks first
+  if(menu_page_pending()) {
+    confirm.open = true; confirm.sel = 0;
+    confirm.close = menu_is_root(menu_state->menu);
+    return;
+  }
+
   // are we in the root menu?
-  if(menu_state->menu == cfg->menu)
-    osd_enable(OSD_INVISIBLE);
+  if(menu_state->type == MENU_TYPE_MENU && menu_is_root(menu_state->menu))
+    menu_close();
   else {
     // are we in fileselector?
     if(menu_state->type == MENU_TYPE_FILESELECTOR) {
@@ -998,9 +1227,9 @@ static void menu_select(void) {
     return;
   }							  
 
-  // if the title was selected, then goto parent form
+  // if the title was selected (single button mode), then go back
   if(menu_state->selected == 0) {
-    menu_pop();
+    menu_back();
     return;
   }
 
@@ -1009,7 +1238,10 @@ static void menu_select(void) {
     menu_fileselector_select(dir_entry(menu_state->dir, menu_state->selected-1));
     return;
   }
-  
+
+  // custom pages (e.g. About) have nothing to select
+  if(!entry) return;
+
   menu_debugf("Selected: %s '%s'", config_menuentry_get_type_str(entry), menuentry_get_label(entry));
 
   switch(entry->type) {
@@ -1022,25 +1254,21 @@ static void menu_select(void) {
     menu_goto(entry->menu);
     break;
 
-  case CONFIG_MENU_ENTRY_LIST: {
-    // user has choosen a selection list: go to the next entry in list
-    // order and back to the first one after the last. The values need not
-    // be 0..n-1, e.g. DIP switch settings like 3, 2, 1
-    config_listentry_t *le = entry->list->listentries;
-    int value = menu_variable_get(entry->list->id);
-    while(le && le->value != value) le = le->next;
-    le = (le && le->next) ? le->next : entry->list->listentries;
-    if(le) menu_variable_set(entry->list->id, le->value);
+  case CONFIG_MENU_ENTRY_LIST:
+    // go to the next entry in list order and back to the first one after
+    // the last. The values need not be 0..n-1, e.g. DIP switch settings
+    // like 3, 2, 1. A list's action (e.g. a cold boot) runs once the
+    // page is left and the change confirmed.
+    menu_list_step(entry, 1, true);
+    break;
 
-    // check if there's an action connected to changing this
-    // list. This e.g. happens when changing system settings is
-    // meant to trigger a (cold) boot
-    if(entry->list->action)
-      sys_run_action(entry->list->action);
-
-  } break;
+  case CONFIG_MENU_ENTRY_OPTION:
+    menu_option_step(entry->option, 1, true);
+    break;
 
   case CONFIG_MENU_ENTRY_BUTTON:
+    // buttons often reset the core and hide the menu: save changes first
+    menu_autosave();
     if(entry->button->action)
       sys_run_action(entry->button->action);
     break;
@@ -1052,40 +1280,84 @@ static void menu_select(void) {
     
   case CONFIG_MENU_ENTRY_TOGGLE:
     menu_variable_set(entry->toggle->id, !menu_variable_get(entry->toggle->id));
+    menu_dirty = true;
     if(entry->toggle->action)
       sys_run_action(entry->toggle->action);
     break;
 
   case CONFIG_MENU_ENTRY_RANGE:
-    // selecting a range entry enables changing its value
+    // selecting a range entry enables changing its value with up/down
     entry->range->edit = true;
     break;
-    
+
+  case CONFIG_MENU_ENTRY_INFO:
+    break;
+
   default:
-    menu_debugf("unknown %s", config_menuentry_get_type_str(entry));    
+    menu_debugf("unknown %s", config_menuentry_get_type_str(entry));
   }
+}
+
+// Left/Right: change the value of the selected row. Left on a row without
+// a value goes back, Right on a submenu or file selector opens it.
+static void menu_left_right(int dir) {
+  if(menu_state->type == MENU_TYPE_FILESELECTOR) {
+    if(dir < 0) menu_back();
+    else if(menu_state->selected > 0 && dir_entry(menu_state->dir, menu_state->selected-1)->is_dir)
+      menu_select();
+    return;
+  }
+
+  config_menu_entry_t *entry = menu_get_selected_entry();
+  if(entry) {
+    switch(entry->type) {
+    case CONFIG_MENU_ENTRY_LIST:   menu_list_step(entry, dir, false);         return;
+    case CONFIG_MENU_ENTRY_OPTION: menu_option_step(entry->option, dir, false); return;
+    case CONFIG_MENU_ENTRY_RANGE:  menu_range_step(entry->range, dir);       return;
+
+    case CONFIG_MENU_ENTRY_TOGGLE:
+      if((dir > 0) != (menu_variable_get(entry->toggle->id) != 0)) menu_select();
+      return;
+
+    case CONFIG_MENU_ENTRY_MENU:
+    case CONFIG_MENU_ENTRY_FILESELECTOR:
+    case CONFIG_MENU_ENTRY_IMAGE:
+      if(dir > 0) { menu_select(); return; }
+      break;
+    }
+  }
+
+  if(dir < 0) menu_back();
 }
 
 // timer implementing key repeat
 static TimerHandle_t menu_key_repeat_timer = NULL;  
 static int menu_key_last_event = -1;
 
-static void menu_key_repeat(__attribute__((unused)) TimerHandle_t arg) { 
-  if(menu_key_last_event >= 0) {
-  
+// draw the current page, or the "Apply and restart?" question over it
+static void menu_redraw(void) {
+  if(menu_dialog_is_open()) return;
+  if(confirm.open) { menu_confirm_draw(); return; }
+
+  if(menu_state->type == MENU_TYPE_MENU)
+    menu_draw(menu_state->menu, menu_state->selected, menu_state->scroll);
+  else if(menu_state->type == MENU_TYPE_FILESELECTOR)
+    menu_fsel_draw(menu_state->label, menu_state->dir, menu_state->selected, menu_state->scroll);
+  else if(menu_state->type == MENU_TYPE_CUSTOM)
+    menu_custom_draw(menu_state->custom, menu_state->selected, menu_state->scroll);
+}
+
+static void menu_key_repeat(__attribute__((unused)) TimerHandle_t arg) {
+  if(menu_key_last_event >= 0 && !confirm.open) {
+
     if(menu_key_last_event == MENU_EVENT_UP)     menu_entry_go(-1);
     if(menu_key_last_event == MENU_EVENT_DOWN)   menu_entry_go( 1);
 
     if(menu_key_last_event == MENU_EVENT_PGUP)   menu_entry_go(-4);
     if(menu_key_last_event == MENU_EVENT_PGDOWN) menu_entry_go( 4);
 
-    if(menu_state->type == MENU_TYPE_MENU)
-      menu_draw(menu_state->menu, menu_state->selected, menu_state->scroll);
-    else if(menu_state->type == MENU_TYPE_FILESELECTOR)
-      menu_fsel_draw(menu_state->label, menu_state->dir, menu_state->selected, menu_state->scroll);
-    else if(menu_state->type == MENU_TYPE_CUSTOM)
-      menu_custom_draw(menu_state->custom, menu_state->selected, menu_state->scroll);
-  
+    menu_redraw();
+
     xTimerChangePeriod( menu_key_repeat_timer, pdMS_TO_TICKS(100), 0);
     xTimerStart( menu_key_repeat_timer, 0 );
   }
@@ -1118,14 +1390,30 @@ void menu_do(int event) {
   }
   
   menu_debugf("do %d", event);
-  
+
+  // the "Apply and restart?" question takes the keys while it's open
+  if(event && confirm.open) {
+    if(event == MENU_EVENT_LEFT || event == MENU_EVENT_RIGHT ||
+       event == MENU_EVENT_UP   || event == MENU_EVENT_DOWN)
+      confirm.sel ^= 1;
+    else if(event == MENU_EVENT_SELECT)
+      menu_confirm_choose(confirm.sel == 0);
+    else if(event == MENU_EVENT_BACK)
+      confirm.open = false;   // stay on the page, changes keep waiting
+    else
+      return;                 // e.g. key release
+
+    if(osd_is_visible()) menu_redraw();
+    return;
+  }
+
   if(event)  {
     if(event == MENU_EVENT_TOGGLE) {
       if(!osd_is_visible())
 	osd_enable(OSD_VISIBLE);
       else {
-	menu_timer_enable(false);
-	osd_enable(OSD_INVISIBLE);
+	menu_leave_all();   // saves, or asks about waiting changes first
+	if(osd_is_visible()) menu_redraw();
 	return;  // return now to prevent OSD from being drawn, again
       }
     }
@@ -1153,19 +1441,15 @@ void menu_do(int event) {
     if(event == MENU_EVENT_PGUP)   menu_entry_go(-4);
     if(event == MENU_EVENT_PGDOWN) menu_entry_go( 4);
 
+    if(event == MENU_EVENT_LEFT)   menu_left_right(-1);
+    if(event == MENU_EVENT_RIGHT)  menu_left_right( 1);
+
     if(event == MENU_EVENT_SELECT) menu_select();
     if(event == MENU_EVENT_BACK)   menu_back();
   }
 
-  // if no dialog is open, then draw menu/fsel
-  if(!menu_dialog_is_open()) {  
-    if(menu_state->type == MENU_TYPE_MENU)
-      menu_draw(menu_state->menu, menu_state->selected, menu_state->scroll);
-    else if(menu_state->type == MENU_TYPE_FILESELECTOR)
-      menu_fsel_draw(menu_state->label, menu_state->dir, menu_state->selected, menu_state->scroll);  
-    else if(menu_state->type == MENU_TYPE_CUSTOM)
-      menu_custom_draw(menu_state->custom, menu_state->selected, menu_state->scroll);
-  }
+  // nothing to draw once the menu has been closed
+  if(osd_is_visible()) menu_redraw();
 }
 
 TimerHandle_t menu_timer_handle;
@@ -1199,6 +1483,80 @@ static bool menu_is_systemmenu(void) {
   }
   return false;
 }  
+
+/* ================= volume hotkeys ================= */
+
+static TimerHandle_t menu_strip_timer = NULL;      // hides the volume bar
+static TimerHandle_t menu_autosave_timer = NULL;   // saves after the last volume change
+
+static void menu_strip_timeout(__attribute__((unused)) TimerHandle_t arg) {
+  menu_notify(MENU_EVENT_STRIP_HIDE);
+}
+
+static void menu_autosave_timeout(__attribute__((unused)) TimerHandle_t arg) {
+  menu_notify(MENU_EVENT_AUTOSAVE);
+}
+
+// the list marked role="volume", hidden or not
+static config_menu_entry_t *menu_find_volume(const config_menu_t *menu) {
+  for(config_menu_entry_t *e = menu->entries; e; e = e->next) {
+    if(e->type == CONFIG_MENU_ENTRY_LIST && (e->list->flags & CONFIG_LIST_VOLUME)) return e;
+    if(e->type == CONFIG_MENU_ENTRY_MENU) {
+      config_menu_entry_t *v = menu_find_volume(e->menu);
+      if(v) return v;
+    }
+  }
+  return NULL;
+}
+
+// TV style volume bar in the bottom 16 lines, shown in the OSD's strip mode
+static void menu_volume_bar(const config_list_t *list) {
+  // the number sits in a slot as wide as the widest label, ending 4 pixels
+  // from the right; with the speaker 6 pixels from the left both sides get
+  // about the same padding. The bar fills the space between.
+  u8g2_SetFont(&u8g2, u8g2_font_helvB08_tr);
+  int steps = -1, pos = 0, nw = 0, value = menu_variable_get(list->id);
+  const char *label = "";
+  for(config_listentry_t *le = list->listentries; le; le = le->next) {
+    steps++;
+    if(le->value == value) { pos = steps; label = le->label; }
+    int w = u8g2_GetStrWidth(&u8g2, le->label);
+    if(w > nw) nw = w;
+  }
+  if(steps < 1) steps = 1;
+
+  const int y = 48, ix = 6, slot_r = 124, slot_l = slot_r - nw;
+  const int bx = ix + 13, bw = slot_l - 4 - bx, by = y + 5, bh = 7;
+  u8g2_ClearBuffer(&u8g2);
+  u8g2_DrawXBM(&u8g2, ix, y+4, 4, 8, icn_speaker_bits);
+  if(pos) u8g2_DrawXBM(&u8g2, ix+5, y+4, 4, 8, icn_sound_bits);
+  else    u8g2_DrawXBM(&u8g2, ix+6, y+4, 4, 8, icn_mute_bits);
+  u8g2_DrawFrame(&u8g2, bx, by, bw, bh);
+  if(pos) u8g2_DrawBox(&u8g2, bx+2, by+2, (bw-4)*pos/steps, bh-4);
+  for(int t=1;t<steps;t++) u8g2_DrawPixel(&u8g2, bx+2+(bw-4)*t/steps, by-2);   // a tick per step
+  u8g2_DrawStr(&u8g2, slot_l + (nw - u8g2_GetStrWidth(&u8g2, label) + 1) / 2, y+12, label);
+  u8g2_SetFont(&u8g2, font_helvR08_te);
+  u8g2_SendBuffer(&u8g2);
+}
+
+static void menu_volume_step(int dir) {
+  if(!cfg) return;
+  config_menu_entry_t *e = menu_find_volume(cfg->menu);
+  if(!e) return;
+
+  menu_list_step(e, dir, false);
+
+  if(osd_is_visible())
+    menu_redraw();   // the menu itself is open, no bar
+  else {
+    menu_volume_bar(e->list);
+    osd_strip(1);
+    xTimerReset(menu_strip_timer, 0);
+  }
+
+  // save a moment after the last change, not on every key press
+  xTimerReset(menu_autosave_timer, 0);
+}
 
 static void menu_handle_latin1(uint8_t code) {
   // this function receives lagtin1 encoded keyboard events and
@@ -1271,6 +1629,22 @@ static void menu_task(__attribute__((unused)) void *parms) {
       menu_draw_dialog("USB", "A USB mass storage device has been removed!");
     }
 
+    else if(cmd == MENU_EVENT_VOLUME_DOWN || cmd == MENU_EVENT_VOLUME_UP)
+      menu_volume_step(cmd == MENU_EVENT_VOLUME_UP ? 1 : -1);
+
+    else if(cmd == MENU_EVENT_MEDIA_VOLUME_DOWN || cmd == MENU_EVENT_MEDIA_VOLUME_UP) {
+      if(inifile_option_get(INIFILE_OPTION_MEDIAKEYS))
+        menu_volume_step(cmd == MENU_EVENT_MEDIA_VOLUME_UP ? 1 : -1);
+    }
+
+    else if(cmd == MENU_EVENT_STRIP_HIDE) {
+      if(!osd_is_visible()) osd_strip(0);   // unless the menu was opened meanwhile
+    }
+
+    else if(cmd == MENU_EVENT_AUTOSAVE) {
+      if(!osd_is_visible()) menu_autosave(); // an open menu saves when it closes
+    }
+
     else if((cmd & 0xffffff00) == MENU_EVENT_KEY_LATIN1)
       menu_handle_latin1(cmd & 0xff);
 
@@ -1280,6 +1654,8 @@ static void menu_task(__attribute__((unused)) void *parms) {
 }
 
 TaskHandle_t menu_handle = NULL;
+
+static void menu_add_companion_page(void);
 
 void menu_init(void) {
   menu_debugf("Initializing");
@@ -1299,11 +1675,20 @@ void menu_init(void) {
   menu_debugf("Processing init action");
   sys_run_action_by_name("init");
 
-  menu_goto(cfg->menu);    
+  // every core's main menu ends with the companion's own settings
+  menu_add_companion_page();
+
+  menu_goto(cfg->menu);
 
   // create a one shot timer for key repeat
   menu_key_repeat_timer = xTimerCreate( "Key repeat timer", pdMS_TO_TICKS(500), pdFALSE,
 					NULL, menu_key_repeat);
+
+  // volume bar display time and the save after volume changes
+  menu_strip_timer = xTimerCreate("Volume bar timer", pdMS_TO_TICKS(1500), pdFALSE,
+				  NULL, menu_strip_timeout);
+  menu_autosave_timer = xTimerCreate("Autosave timer", pdMS_TO_TICKS(2000), pdFALSE,
+				     NULL, menu_autosave_timeout);
     
   // switch MCU controlled leds off
   sys_set_leds(0x00);
@@ -1348,24 +1733,30 @@ void menu_notify_network_disconnected(void) {
   menu_notify(MENU_EVENT_NETWORK_DISCONNECTED);
 }
 
-void menu_joystick_state(unsigned char state) {
+void menu_joystick_state(unsigned char state, bool notify) {
   static unsigned char prev_state = 0;
 
-  if(state != prev_state) {
-    static unsigned long msg;
-    menu_debugf("Joystick state change to %02x", state);
+  // Track the state even while the menu is closed. Otherwise the last
+  // button used in the menu (e.g. left to close it) would still count as
+  // pressed when the menu opens again, and its next press would be ignored.
+  if(state == prev_state) return;
+  prev_state = state;
+  if(!notify) return;
 
-    msg = 0;
-    if(state & 0x08) msg = MENU_EVENT_UP;      
-    if(state & 0x04) msg = MENU_EVENT_DOWN;      
-    if(state & 0x02) msg = MENU_EVENT_BACK;      
-    if(state & 0x10) msg = MENU_EVENT_SELECT;
-    if(state & 0x20) msg = MENU_EVENT_BACK;
-    if(!msg) msg = MENU_EVENT_KEY_RELEASE;
-    menu_notify(msg);
+  unsigned long msg = 0;
+  menu_debugf("Joystick state change to %02x", state);
 
-    prev_state = state;
-  }
+  // face buttons by position: 0x10 bottom, 0x20 right, 0x40 left, 0x80 top.
+  // Left and right select, bottom goes back (SNES: Y and A select, B back;
+  // PlayStation: square and circle select, cross back).
+  if(state & 0x08) msg = MENU_EVENT_UP;
+  if(state & 0x04) msg = MENU_EVENT_DOWN;
+  if(state & 0x02) msg = MENU_EVENT_LEFT;
+  if(state & 0x01) msg = MENU_EVENT_RIGHT;
+  if(state & 0x60) msg = MENU_EVENT_SELECT;
+  if(state & 0x10) msg = MENU_EVENT_BACK;
+  if(!msg) msg = MENU_EVENT_KEY_RELEASE;
+  menu_notify(msg);
 }
 
 // ===========  "single button" menu control ================
@@ -1453,9 +1844,14 @@ static int about_length(void) {
 }
 
 static void about_draw(void) {
-  u8g2_DrawStr(&u8g2, 20, MENU_LINE_Y + 1*MENU_ENTRY_H, "FPGA Companion");
-  u8g2_DrawStr(&u8g2, 5, MENU_LINE_Y + 2*MENU_ENTRY_H, "(c) 2026 the MiSTle Team");
-  u8g2_DrawStr(&u8g2, 0, MENU_LINE_Y + 3*MENU_ENTRY_H, "http://github.com/mistle-dev");
+  // three centered lines, 6 pixels below the regular rows so the block looks
+  // centered in the space under the title (the descenders make it look high
+  // when it's centered exactly)
+  static const char *lines[] = { "FPGA Companion", "(c) 2026 the MiSTle Team", "github.com/mistle-dev" };
+  int width = u8g2_GetDisplayWidth(&u8g2);
+  for(int i=0;i<3;i++)
+    u8g2_DrawStr(&u8g2, (width - u8g2_GetStrWidth(&u8g2, lines[i])) / 2,
+		 MENU_LINE_Y + (i+1)*MENU_ENTRY_H + 6, lines[i]);
 }
 
 static const config_custom_t about = {
@@ -1579,4 +1975,53 @@ static const config_menu_t system_menu_main = {
   .label = "Companion",
   .entries = (config_menu_entry_t*)&system_menu_about
 };
+
+/* ================= companion settings page ================= */
+
+/* Added to the end of every core's main menu. The settings are firmware
+   options, saved with the core's settings (option lines in its ini file). */
+
+static const char * const menu_key_labels[] = { "F12", "F11", "Scroll Lk" };
+static const int          menu_key_values[] = { 0x45, 0x44, 0x47 };   // HID key codes
+static const char * const padmenu_labels[]  = { "Off", "Sel+Start", "Start", "Select" };
+static const char * const volkeys_labels[]  = { "Off", "F9 / F10", "Ctrl - / =" };
+static const char * const onoff_labels[]    = { "Off", "On" };
+static const char * const led_labels[]      = { "Blink", "On", "Off" };
+
+static config_option_t opt_menu_key  = { "Menu key",    INIFILE_OPTION_HOTKEY,    menu_key_labels, menu_key_values, 3 };
+static config_option_t opt_pad_menu  = { "Pad menu",    INIFILE_OPTION_PADMENU,   padmenu_labels,  NULL, 4 };
+static config_option_t opt_vol_keys  = { "Volume keys", INIFILE_OPTION_VOLKEYS,   volkeys_labels,  NULL, 3 };
+static config_option_t opt_media     = { "Media keys",  INIFILE_OPTION_MEDIAKEYS, onoff_labels,    NULL, 2 };
+static config_option_t opt_pad_vol   = { "Pad volume",  INIFILE_OPTION_PADVOL,    onoff_labels,    NULL, 2 };
+static config_option_t opt_led       = { "Status LED",  INIFILE_OPTION_LED,       led_labels,      NULL, 3 };
+
+static const char *menu_network_text(void) {
+  return network_was_connected ? network_ipaddr : "offline";
+}
+static config_info_t info_network = { "Network", menu_network_text };
+
+static config_button_t comp_about_btn = { "About", (config_action_t*)&about_action };
+
+// Hotkeys page
+static config_menu_entry_t hk_pad_vol  = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_pad_vol,  .next = NULL };
+static config_menu_entry_t hk_media    = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_media,    .next = &hk_pad_vol };
+static config_menu_entry_t hk_vol_keys = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_vol_keys, .next = &hk_media };
+static config_menu_entry_t hk_pad_menu = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_pad_menu, .next = &hk_vol_keys };
+static config_menu_entry_t hk_menu_key = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_menu_key, .next = &hk_pad_menu };
+static config_menu_t hotkeys_menu = { .label = "Hotkeys", .entries = &hk_menu_key };
+
+// Companion page
+static config_menu_entry_t comp_about   = { .type = CONFIG_MENU_ENTRY_BUTTON, .button = &comp_about_btn, .next = NULL };
+static config_menu_entry_t comp_network = { .type = CONFIG_MENU_ENTRY_INFO,   .info = &info_network,     .next = &comp_about };
+static config_menu_entry_t comp_led     = { .type = CONFIG_MENU_ENTRY_OPTION, .option = &opt_led,        .next = &comp_network };
+static config_menu_entry_t comp_hotkeys = { .type = CONFIG_MENU_ENTRY_MENU,   .menu = &hotkeys_menu,     .next = &comp_led };
+static config_menu_t companion_menu = { .label = "Companion", .entries = &comp_hotkeys };
+
+static config_menu_entry_t comp_entry = { .type = CONFIG_MENU_ENTRY_MENU, .menu = &companion_menu, .next = NULL };
+
+static void menu_add_companion_page(void) {
+  config_menu_entry_t **e = &cfg->menu->entries;
+  while(*e) e = &(*e)->next;
+  *e = &comp_entry;
+}
 

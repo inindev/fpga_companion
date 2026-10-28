@@ -90,6 +90,10 @@ static const struct {
   // open/close OSD (F12) = 6
   { 0x40,  MENU_EVENT_TOGGLE },    // MENU
   { 0x223, MENU_EVENT_TOGGLE },    // AC HOME
+
+  // keyboard media keys
+  { 0xe9,  MENU_EVENT_MEDIA_VOLUME_UP   },    // VOLUME INCREMENT
+  { 0xea,  MENU_EVENT_MEDIA_VOLUME_DOWN },    // VOLUME DECREMENT
   { 0, 0 }  
 };
 

@@ -25,12 +25,18 @@ static int iswhite(char c) {
 }
 
 static const struct option_S { char *name; char *info; int index; } option_ids[] = {
-  {"hotkey", "; HID key code of OSD/menu hotkey\n",  INIFILE_OPTION_HOTKEY },
-  {"led",    "; led state (0=blink, 1=on, 2=off)\n", INIFILE_OPTION_LED },
-  {NULL,     NULL,                                   -1 }
+  {"hotkey",    "; HID key code of OSD/menu hotkey\n",  INIFILE_OPTION_HOTKEY },
+  {"led",       "; led state (0=blink, 1=on, 2=off)\n", INIFILE_OPTION_LED },
+  {"padmenu",   "; gamepad menu button (0=off, 1=select+start, 2=start, 3=select)\n", INIFILE_OPTION_PADMENU },
+  {"volkeys",   "; volume keys (0=off, 1=F9/F10, 2=ctrl -/=)\n", INIFILE_OPTION_VOLKEYS },
+  {"mediakeys", "; keyboard media volume keys (0=off, 1=on)\n", INIFILE_OPTION_MEDIAKEYS },
+  {"padvolume", "; gamepad volume with select + L/R (0=off, 1=on)\n", INIFILE_OPTION_PADVOL },
+  {NULL,        NULL,                                   -1 }
 };
 
-static int options[2] = { 0x45, 1 };  // default options: hotkey=F12, led=on (steady)
+// defaults: hotkey=F12, led=on (steady), gamepad menu=select+start,
+// volume keys=F9/F10, media keys on, gamepad volume on
+static int options[INIFILE_OPTIONS] = { 0x45, 1, 1, 1, 1, 1 };
 static void inifile_parse_option(char *id, char *value) {
   for(const struct option_S *oid = option_ids;oid->name;oid++) {
     if(!strcasecmp(oid->name, id)) {
@@ -41,8 +47,12 @@ static void inifile_parse_option(char *id, char *value) {
 }
 
 int inifile_option_get(int id) {
-  if((id < 0) || (id > 1)) return -1;
+  if((id < 0) || (id >= INIFILE_OPTIONS)) return -1;
   return options[id];
+}
+
+void inifile_option_set(int id, int value) {
+  if((id >= 0) && (id < INIFILE_OPTIONS)) options[id] = value;
 }
 
 int inifile_read(char *name) {

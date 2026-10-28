@@ -10,11 +10,17 @@
 
 #define INIFILE_OPTION_HOTKEY   0   // HID key code
 #define INIFILE_OPTION_LED      1   // 0 = blink, 1 = on, 0 = off
+#define INIFILE_OPTION_PADMENU  2   // gamepad menu button: 0 = off, 1 = Select+Start, 2 = Start, 3 = Select
+#define INIFILE_OPTION_VOLKEYS  3   // volume keys: 0 = off, 1 = F9/F10, 2 = Ctrl -/=
+#define INIFILE_OPTION_MEDIAKEYS 4  // keyboard media volume keys: 0 = off, 1 = on
+#define INIFILE_OPTION_PADVOL   5   // gamepad volume with Select + L/R: 0 = off, 1 = on
+#define INIFILE_OPTIONS         6
 
 // handle the core specific ini file
 int inifile_read(char *);
 int inifile_write(char *);   // 0 = written, -1 = failed
 int inifile_option_get(int id);
+void inifile_option_set(int id, int value);
 
 // handle the global ini file (config.ini)
 void inifile_config_read(void);

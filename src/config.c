@@ -343,15 +343,11 @@ static config_menu_entry_t *config_xml_get_last_menu_entry(config_menu_t *menu, 
 }
 
 const char *config_menuentry_get_type_str(config_menu_entry_t *entry) {
-  const char *names[] = { "unknown", "menu", "fileselector", "list", "button", "image", "toggle" };
+  const char *names[] = { "unknown", "menu", "fileselector", "list", "button", "image", "toggle",
+                          "range", "option", "info" };
 
-  if(entry->type == CONFIG_MENU_ENTRY_MENU)         return names[1];
-  if(entry->type == CONFIG_MENU_ENTRY_FILESELECTOR) return names[2];
-  if(entry->type == CONFIG_MENU_ENTRY_LIST)         return names[3];
-  if(entry->type == CONFIG_MENU_ENTRY_BUTTON)       return names[4];
-  if(entry->type == CONFIG_MENU_ENTRY_IMAGE)        return names[5];
-  if(entry->type == CONFIG_MENU_ENTRY_TOGGLE)       return names[6];
-  return names[0];  
+  if(entry->type <= CONFIG_MENU_ENTRY_INFO) return names[entry->type];
+  return names[0];
 }
 
 static int config_xml_menu_element(char *name) {
@@ -514,6 +510,8 @@ static void config_xml_new_list(config_menu_t *menu) {
   config_list_t *list = pvPortMalloc(sizeof(config_list_t));
   list->id = -1;
   list->def = -1;
+  list->flags = 0;
+  list->pending = -1;
   list->label = NULL;
   list->action = NULL;
   list->listentries = NULL;
@@ -563,7 +561,14 @@ static void config_xml_list_attribute(char *name, char *value) {
       me->list->def = atoi(value);
     else if(me->list && strcasecmp(name, "action") == 0)
       me->list->action = config_get_action(value);
-    
+    else if(me->list && strcasecmp(name, "hidden") == 0) {
+      if(!strcasecmp(value, "true") || !strcasecmp(value, "yes") || !strcmp(value, "1"))
+        me->list->flags |= CONFIG_LIST_HIDDEN;
+    } else if(me->list && strcasecmp(name, "role") == 0) {
+      if(!strcasecmp(value, "volume"))
+        me->list->flags |= CONFIG_LIST_VOLUME;
+    }
+
     else
       debugf("WARNING: Unused list attribute '%s'", name);
   }

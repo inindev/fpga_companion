@@ -70,10 +70,16 @@ typedef struct config_listentry_S {
   struct config_listentry_S *next;
 } config_listentry_t;
 
+// list flags, from the list's XML attributes
+#define CONFIG_LIST_HIDDEN  0x01   // hidden="true": kept and saved, not shown in the menu
+#define CONFIG_LIST_VOLUME  0x02   // role="volume": changed by the volume hotkeys
+
 typedef struct {
   unsigned char id;
   char *label;
   unsigned char def;
+  unsigned char flags;           // CONFIG_LIST_...
+  int pending;                   // value waiting to be applied (lists with an action), -1 = none
   config_listentry_t *listentries;
   config_action_t *action;
 } config_list_t;
@@ -117,18 +123,36 @@ typedef struct {
 #define CONFIG_MENU_ENTRY_IMAGE         5
 #define CONFIG_MENU_ENTRY_TOGGLE        6
 #define CONFIG_MENU_ENTRY_RANGE         7
+#define CONFIG_MENU_ENTRY_OPTION        8   // companion setting (firmware option), built in
+#define CONFIG_MENU_ENTRY_INFO          9   // read-only text, built in
+
+// a companion setting stored as a firmware option in the core's ini file
+typedef struct {
+  char *label;
+  int option;                    // INIFILE_OPTION_...
+  const char * const *labels;    // one label per choice
+  const int *values;             // option value per choice, NULL: 0..count-1
+  int count;
+} config_option_t;
+
+typedef struct {
+  char *label;
+  const char *(*text)(void);
+} config_info_t;
 
 typedef struct config_menu_entry_S {
   unsigned char type;
   union {
     struct config_menu_S *menu;
-    config_fsel_t *fsel;    
-    config_list_t *list;    
+    config_fsel_t *fsel;
+    config_list_t *list;
     config_button_t *button;
     config_image_t *image;
     config_toggle_t *toggle;
     config_range_t *range;
-  };  
+    config_option_t *option;
+    config_info_t *info;
+  };
   struct config_menu_entry_S *next;
 } config_menu_entry_t;
 
