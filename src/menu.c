@@ -1170,6 +1170,70 @@ static void menu_confirm_draw(void) {
   u8g2_SendBuffer(&u8g2);
 }
 
+/* ============ core error message ============ */
+
+// Shown when the core reports an error number, e.g. a missing drive ROM.
+// The text comes from the core's config (<error code=".." .../>). It stays
+// until OK is pressed.
+static struct {
+  bool open;
+  bool opened_osd;    // the message opened the OSD, closing it hides it again
+  char title[32];
+  char text[100];     // up to three lines, separated by '|'
+} core_err;
+
+static const unsigned char icn_warning_bits[] = { 0x08,0x14,0x1c,0x2a,0x22,0x49,0x7f };  // 7x7
+
+static void menu_core_error_draw(void) {
+  u8g2_ClearBuffer(&u8g2);
+
+  // title bar: inverted, with a warning sign
+  u8g2_DrawBox(&u8g2, 0, 0, 128, 12);
+  u8g2_SetDrawColor(&u8g2, 0);
+  u8g2_DrawXBM(&u8g2, 3, 2, 7, 7, icn_warning_bits);
+  u8g2_SetFont(&u8g2, u8g2_font_helvB08_tr);
+  u8g2_DrawStr(&u8g2, 13, 9, core_err.title);
+  u8g2_SetDrawColor(&u8g2, 1);
+
+  // up to three centered lines
+  u8g2_SetFont(&u8g2, font_helvR08_te);
+  const char *s = core_err.text;
+  for(int i=0;i<3 && *s;i++) {
+    char line[48];
+    int n = 0;
+    while(s[n] && s[n] != '|' && n < (int)sizeof(line)-1) { line[n] = s[n]; n++; }
+    line[n] = '\0';
+    u8g2_DrawStr(&u8g2, (128 - u8g2_GetStrWidth(&u8g2, line)) / 2, 23 + 11*i, line);
+    s += n;
+    if(*s == '|') s++;
+  }
+
+  // OK button, always selected
+  u8g2_DrawBox(&u8g2, 48, 51, 32, 13);
+  u8g2_SetDrawColor(&u8g2, 0);
+  u8g2_DrawStr(&u8g2, 64 - u8g2_GetStrWidth(&u8g2, "OK") / 2, 61, "OK");
+  u8g2_SetDrawColor(&u8g2, 1);
+
+  u8g2_SendBuffer(&u8g2);
+}
+
+static void menu_core_error(int code) {
+  const config_error_t *e = config_get_error(code);
+  snprintf(core_err.title, sizeof(core_err.title), "%s", (e && e->title) ? e->title : "Core error");
+  if(e && e->text) snprintf(core_err.text, sizeof(core_err.text), "%s", e->text);
+  else             snprintf(core_err.text, sizeof(core_err.text), "The core reports|error %d.", code);
+
+  if(!core_err.open) core_err.opened_osd = !osd_is_visible();
+  core_err.open = true;
+  if(!osd_is_visible()) osd_enable(OSD_VISIBLE);
+  menu_core_error_draw();
+}
+
+static void menu_core_error_close(void) {
+  core_err.open = false;
+  if(core_err.opened_osd) osd_enable(OSD_INVISIBLE);
+}
+
 // close the menu, asking first if the page has waiting changes
 static void menu_leave_all(void) {
   if(menu_page_pending()) {
@@ -1337,6 +1401,7 @@ static int menu_key_last_event = -1;
 // draw the current page, or the "Apply and restart?" question over it
 static void menu_redraw(void) {
   if(menu_dialog_is_open()) return;
+  if(core_err.open) { menu_core_error_draw(); return; }
   if(confirm.open) { menu_confirm_draw(); return; }
 
   if(menu_state->type == MENU_TYPE_MENU)
@@ -1348,7 +1413,7 @@ static void menu_redraw(void) {
 }
 
 static void menu_key_repeat(__attribute__((unused)) TimerHandle_t arg) {
-  if(menu_key_last_event >= 0 && !confirm.open) {
+  if(menu_key_last_event >= 0 && !confirm.open && !core_err.open) {
 
     if(menu_key_last_event == MENU_EVENT_UP)     menu_entry_go(-1);
     if(menu_key_last_event == MENU_EVENT_DOWN)   menu_entry_go( 1);
@@ -1390,6 +1455,16 @@ void menu_do(int event) {
   }
   
   menu_debugf("do %d", event);
+
+  // a core error message takes the keys while it's open: OK closes it
+  if(event && core_err.open) {
+    if(event == MENU_EVENT_SELECT || event == MENU_EVENT_BACK || event == MENU_EVENT_TOGGLE ||
+       event == MENU_EVENT_LEFT || event == MENU_EVENT_RIGHT) {
+      menu_core_error_close();
+      if(osd_is_visible()) menu_redraw();
+    }
+    return;
+  }
 
   // the "Apply and restart?" question takes the keys while it's open
   if(event && confirm.open) {
@@ -1644,6 +1719,9 @@ static void menu_task(__attribute__((unused)) void *parms) {
     else if(cmd == MENU_EVENT_AUTOSAVE) {
       if(!osd_is_visible()) menu_autosave(); // an open menu saves when it closes
     }
+
+    else if((cmd & 0xffffff00) == MENU_EVENT_CORE_ERROR)
+      menu_core_error(cmd & 0xff);
 
     else if((cmd & 0xffffff00) == MENU_EVENT_KEY_LATIN1)
       menu_handle_latin1(cmd & 0xff);

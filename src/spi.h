@@ -20,6 +20,7 @@
 #define SPI_SYS_READ_CFG  8
 #define SPI_SYS_JTAGSEL   9
 #define SPI_SYS_TIME     10
+#define SPI_SYS_ERROR    11   // read the core's error number (0 = none)
 
 // port subcommands
 #define SPI_SYS_PORT_STATUS 0

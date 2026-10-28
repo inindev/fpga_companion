@@ -161,11 +161,20 @@ typedef struct config_menu_S {
   config_menu_entry_t *entries;
 } config_menu_t;
 
+// a message the core can ask the companion to show, by its error number
+typedef struct config_error_S {
+  int code;
+  char *title;
+  char *text;                   // up to three lines, separated by '|'
+  struct config_error_S *next;
+} config_error_t;
+
 typedef struct {
   char *name;
   int version;
   config_action_t *actions;
   config_menu_t *menu;
+  config_error_t *errors;
 } config_t;
 
 // the global config
@@ -173,6 +182,7 @@ extern config_t *cfg;
 
 void config_init(void);
 config_action_t *config_get_action(const char *);
+const config_error_t *config_get_error(int code);
 void config_dump(void);
 const char *config_menuentry_get_type_str(config_menu_entry_t *);
 

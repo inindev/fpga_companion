@@ -43,6 +43,7 @@
 #define MENU_EVENT_AUTOSAVE             25   // save settings changed by hotkeys
 
 #define MENU_EVENT_KEY_LATIN1    256  // 256..511
+#define MENU_EVENT_CORE_ERROR    512  // 512..767, the core's error number in the low byte
 
 typedef struct menu_variable {
   char id;

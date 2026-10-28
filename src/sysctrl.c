@@ -265,6 +265,17 @@ static void sys_handle_event(bool ignore_coldboot) {
     }
   }
   
+  if(irq_src & 8) {
+    // the core reports an error, e.g. a missing drive ROM. The menu shows
+    // the message the core's config has for this number
+    sys_begin(SPI_SYS_ERROR);
+    mcu_hw_spi_tx_u08(0);
+    unsigned char code = mcu_hw_spi_tx_u08(0);
+    mcu_hw_spi_end();
+    sys_debugf("Core error %d", code);
+    if(code) menu_notify(MENU_EVENT_CORE_ERROR | code);
+  }
+
   if(irq_src & 4) {
     // read the button state. This will also re-enable
     // button interrupts. buttons[0] usually is

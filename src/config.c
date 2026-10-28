@@ -34,6 +34,7 @@
 #define CONFIG_XML_ELEMENT_IMAGE         15
 #define CONFIG_XML_ELEMENT_TOGGLE        16
 #define CONFIG_XML_ELEMENT_RANGE         17
+#define CONFIG_XML_ELEMENT_ERROR_MSG     18
 
 static int config_element;
 static int config_depth;
@@ -49,8 +50,9 @@ void config_init(void) {
   cfg = pvPortMalloc(sizeof(config_t));
   cfg->name = NULL;  
   cfg->version = -1;  
-  cfg->menu = NULL;  
+  cfg->menu = NULL;
   cfg->actions = NULL;
+  cfg->errors = NULL;
 }
 
 // a FreeRTOS'd version of strdup
@@ -94,13 +96,38 @@ static int config_xml_config_element(char *name) {
     return 0;
   } else if(strcasecmp(name, "menu") == 0) {
     // root level menu
-    cfg->menu = config_xml_new_menu(NULL);      
-    config_element = CONFIG_XML_ELEMENT_MENU;      
+    cfg->menu = config_xml_new_menu(NULL);
+    config_element = CONFIG_XML_ELEMENT_MENU;
+    return 0;
+  } else if(strcasecmp(name, "error") == 0) {
+    // message for a core error number
+    config_error_t *e = pvPortMalloc(sizeof(config_error_t));
+    e->code = 0;
+    e->title = NULL;
+    e->text = NULL;
+    e->next = cfg->errors;
+    cfg->errors = e;
+    config_element = CONFIG_XML_ELEMENT_ERROR_MSG;
     return 0;
   } else
     debugf("WARNING: Unexpected config element %s in state %d", name, config_element);
 
   return -1;
+}
+
+static void config_xml_error_attribute(char *name, char *value) {
+  config_error_t *e = cfg->errors;
+  if(!e) return;
+  if(strcasecmp(name, "code") == 0)                 e->code = atoi(value);
+  else if(strcasecmp(name, "title") == 0 && !e->title) e->title = StrDup(value);
+  else if(strcasecmp(name, "text") == 0 && !e->text)   e->text = StrDup(value);
+  else debugf("WARNING: Unused error attribute '%s'", name);
+}
+
+const config_error_t *config_get_error(int code) {
+  for(const config_error_t *e = cfg ? cfg->errors : NULL; e; e = e->next)
+    if(e->code == code) return e;
+  return NULL;
 }
 
 static void config_xml_config_attribute(char *name, char *value) {    
@@ -892,6 +919,10 @@ void xml_element_end_cb(void) {
   case CONFIG_XML_ELEMENT_LISTENTRY:
     config_element = CONFIG_XML_ELEMENT_LIST;
     break;
+
+  case CONFIG_XML_ELEMENT_ERROR_MSG:
+    config_element = CONFIG_XML_ELEMENT_CONFIG;
+    break;
   }
   config_depth--;
 }
@@ -903,7 +934,11 @@ void xml_attribute_cb(char *name, char *value) {
   case CONFIG_XML_ELEMENT_CONFIG:
     config_xml_config_attribute(name, value);
     break;
-    
+
+  case CONFIG_XML_ELEMENT_ERROR_MSG:
+    config_xml_error_attribute(name, value);
+    break;
+
   case CONFIG_XML_ELEMENT_ACTION:
     config_xml_action_attribute(name, value);
     break;
