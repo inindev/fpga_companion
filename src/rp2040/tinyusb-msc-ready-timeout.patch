@@ -1,0 +1,70 @@
+diff --git a/src/class/msc/msc_host.c b/src/class/msc/msc_host.c
+index c46eb56..b14d1bb 100644
+--- a/src/class/msc/msc_host.c
++++ b/src/class/msc/msc_host.c
+@@ -384,6 +384,15 @@ bool msch_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t event, uint32
+ //--------------------------------------------------------------------+
+ // MSC Enumeration
+ //--------------------------------------------------------------------+
++// How long enumeration waits for a unit to become ready. A card reader without
++// a card never does, and would otherwise block every other device forever.
++#ifndef CFG_TUH_MSC_READY_TIMEOUT_MS
++#define CFG_TUH_MSC_READY_TIMEOUT_MS 2000
++#endif
++
++// devices enumerate one at a time, so one start time is enough
++static uint32_t _enum_ready_start_ms;
++
+ static void config_get_maxlun_complete(tuh_xfer_t* xfer);
+ static bool config_test_unit_ready_complete(uint8_t dev_addr, tuh_msc_complete_data_t const* cb_data);
+ static bool config_request_sense_complete(uint8_t dev_addr, tuh_msc_complete_data_t const* cb_data);
+@@ -470,10 +479,25 @@ static void config_get_maxlun_complete(tuh_xfer_t* xfer) {
+ 
+   // TODO multiple LUN support
+   TU_LOG_DRV("SCSI Test Unit Ready\r\n");
++  _enum_ready_start_ms = tusb_time_millis_api();
+   uint8_t const lun = 0;
+   tuh_msc_test_unit_ready(daddr, lun, config_test_unit_ready_complete, 0);
+ }
+ 
++// Give up on a unit that stays not ready: finish enumeration without mounting
++// it, so the next device can enumerate. Returns true if it gave up.
++static bool config_ready_timed_out(uint8_t dev_addr) {
++  uint32_t const waited_ms = tusb_time_millis_api() - _enum_ready_start_ms;
++  if (waited_ms < CFG_TUH_MSC_READY_TIMEOUT_MS) {
++    return false;
++  }
++
++  msch_interface_t* p_msc = get_itf(dev_addr);
++  TU_LOG_DRV("  Unit not ready after %lu ms (no medium?), not mounted\r\n", (unsigned long) waited_ms);
++  usbh_driver_set_config_complete(dev_addr, p_msc->itf_num);
++  return true;
++}
++
+ static bool config_test_unit_ready_complete(uint8_t dev_addr, tuh_msc_complete_data_t const* cb_data) {
+   msc_cbw_t const* cbw = cb_data->cbw;
+   msc_csw_t const* csw = cb_data->csw;
+@@ -487,7 +511,9 @@ static bool config_test_unit_ready_complete(uint8_t dev_addr, tuh_msc_complete_d
+   } else {
+     // Note: During enumeration, some device fails Test Unit Ready and require a few retries
+     // with Request Sense to start working !!
+-    // TODO limit number of retries
++    if (config_ready_timed_out(dev_addr)) {
++      return true;
++    }
+     TU_LOG_DRV("SCSI Request Sense\r\n");
+     TU_ASSERT(tuh_msc_request_sense(dev_addr, cbw->lun, enum_buf, config_request_sense_complete, 0));
+   }
+@@ -499,7 +525,11 @@ static bool config_request_sense_complete(uint8_t dev_addr, tuh_msc_complete_dat
+   msc_cbw_t const* cbw = cb_data->cbw;
+   msc_csw_t const* csw = cb_data->csw;
+ 
+-  TU_ASSERT(csw->status == 0);
++  // a failed Request Sense used to stop enumeration for good: retry it like
++  // a failed Test Unit Ready instead, until the timeout
++  if (csw->status != 0 && config_ready_timed_out(dev_addr)) {
++    return true;
++  }
+   TU_ASSERT(tuh_msc_test_unit_ready(dev_addr, cbw->lun, config_test_unit_ready_complete, 0));
+   return true;
+ }
